@@ -1,0 +1,64 @@
+[gd_scene load_steps=9 format=3 uid="uid://dukrmnf3n78t3"]
+
+[ext_resource type="Script" path="res://game.gd" id="1_vx01h"]
+[ext_resource type="Shader" path="res://board.gdshader" id="2_8sx3c"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_o0uog"]
+sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
+ground_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
+
+[sub_resource type="Sky" id="Sky_1s53w"]
+sky_material = SubResource("ProceduralSkyMaterial_o0uog")
+
+[sub_resource type="Environment" id="Environment_j3s2y"]
+background_mode = 2
+sky = SubResource("Sky_1s53w")
+tonemap_mode = 2
+glow_enabled = true
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_180au"]
+render_priority = 0
+shader = ExtResource("2_8sx3c")
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fgxlc"]
+albedo_color = Color(1, 0, 0, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wqvf2"]
+albedo_color = Color(0, 1, 0, 1)
+
+[node name="Game" type="Node3D"]
+script = ExtResource("1_vx01h")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_j3s2y")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.101823, -0.990856, -0.0885214, -0.321394, -0.116978, 0.939693, -0.941455, -0.0672321, -0.330366, -0.216148, 30, -0.616938)
+shadow_enabled = true
+
+[node name="Board" type="CSGBox3D" parent="."]
+transform = Transform3D(0.999, 0, 0, 0, 0.999, 0, 0, 0, 0.999, 0, -0.05, 0)
+size = Vector3(12, 0.1, 12)
+material = SubResource("ShaderMaterial_180au")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(-0.707107, 0.5, -0.5, 1.99637e-09, 0.707107, 0.707107, 0.707107, 0.5, -0.5, -5.764, 8.152, -5.764)
+projection = 1
+current = true
+fov = 37.8493
+size = 12.5
+far = 100.0
+
+[node name="Elementals" type="Node3D" parent="."]
+
+[node name="Elemental1" type="CSGBox3D" parent="Elementals"]
+transform = Transform3D(1, 8.6402e-12, 0, -3.31966e-11, 1, 1.16415e-10, -5.82077e-11, 1.16415e-10, 1, 0.5, 0.375, 5.5)
+use_collision = true
+size = Vector3(0.75, 0.75, 0.75)
+material = SubResource("StandardMaterial3D_fgxlc")
+
+[node name="Elemental2" type="CSGBox3D" parent="Elementals"]
+transform = Transform3D(1, 8.6402e-12, 0, -3.31966e-11, 1, 1.16415e-10, -5.82077e-11, 1.16415e-10, 1, 1.5, 0.375, -0.5)
+use_collision = true
+size = Vector3(0.75, 0.75, 0.75)
+material = SubResource("StandardMaterial3D_wqvf2")
