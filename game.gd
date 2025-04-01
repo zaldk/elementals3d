@@ -1,15 +1,19 @@
 extends Node3D
 
-var grabbed_object = null
-var grabbed_object_side = 0 # -1 is blue; 1 is green;
-var grab_distance = 1
 var mouse = Vector2()
 const DIST = 1000
 
+var has_grabbed = false
+var grabbed_object = null
+var grabbed_object_side = 0 # -1 is blue; 1 is green;
+var grab_distance = 1
+var grabbed_object_copy = null
+var grabbed_object_origin = Vector3()
+
 var cam_switch = false
-var cam_times = Vector2() # .x = start; .y = end;
-var cam_pos_start = Vector3()
-var cam_pos_end = Vector3()
+var cam_time = 0
+@export var cam_delta = 1000
+var cam_pos = Vector3()
 
 
 @onready var cam = $Camera3D
@@ -19,20 +23,20 @@ func norm(a: float, b: float, t: float) -> float:
 
 func _ready() -> void:
 	cam.look_at(Vector3.ZERO)
-	var elementals = $Elementals.get_children()
-	print(elementals.map(func(elem): return elem.global_position))
-	#for elem in elementals:
-		#print(elem.global_position)
+	#var elementals = $Elementals.get_children()
+	#print(elementals.map(func(elem): return elem.global_position))
+	##for elem in elementals:
+		##print(elem.global_position)
 
 func _process(_deltatime: float) -> void:
-	if grabbed_object:
-		grabbed_object.position = get_grab_position()
+	if is_instance_valid(grabbed_object_copy):
+		grabbed_object_copy.position = get_grab_position() - grabbed_object_origin
 	
 	if cam_switch:
-		var t = norm(cam_times.x, cam_times.y, Time.get_ticks_msec())
+		var t = norm(cam_time, cam_time + cam_delta, Time.get_ticks_msec())
 		if t >= 0 and t <= 1:
 			t = t * t * t * (t * (6 * t - 15) + 10)
-			var angle = PI/4 + PI * t + PI * (-sign(cam_pos_start.x)/2+0.5)
+			var angle = PI/4 + PI * t + PI * (-sign(cam_pos.x)/2+0.5)
 			var radius = Vector2(cam.global_position.x, cam.global_position.z).length()
 			cam.global_position.x = sin(angle) * radius
 			cam.global_position.z = cos(angle) * radius
@@ -43,17 +47,21 @@ func _process(_deltatime: float) -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		mouse = event.global_position
-	if event is InputEventMouseButton:
-		if event.is_pressed() and event.button_index == MOUSE_BUTTON_LEFT:
-			update_grabbed_object(mouse)
-		if event.is_released() and event.button_index == MOUSE_BUTTON_LEFT:
-			grabbed_object = null
-		if event.is_released() and event.button_index == MOUSE_BUTTON_MIDDLE and not cam_switch:
-			cam_switch = true
-			cam_times.x = Time.get_ticks_msec()
-			cam_times.y = Time.get_ticks_msec() + 1000
-			cam_pos_start = cam.global_position
-			cam_pos_end = cam.global_position; cam_pos_end.x *= -1; cam_pos_end.z *= -1;
+	if event is InputEventMouseButton and event.is_pressed():
+		match event.button_index:
+			MOUSE_BUTTON_LEFT:
+				if !has_grabbed: update_grabbed_object(mouse)
+				if has_grabbed:
+					if is_instance_valid(grabbed_object_copy):
+						grabbed_object.global_position = grabbed_object_copy.global_position
+						grabbed_object_copy.free()
+					grabbed_object = null
+				has_grabbed = !has_grabbed
+			MOUSE_BUTTON_MIDDLE:
+				if !cam_switch:
+					cam_switch = true
+					cam_time = Time.get_ticks_msec()
+					cam_pos = cam.global_position
 
 func update_grabbed_object(M: Vector2):
 	var space = get_world_3d().direct_space_state
@@ -66,6 +74,9 @@ func update_grabbed_object(M: Vector2):
 	if !result.is_empty():
 		grabbed_object = result.collider
 		grabbed_object_side = sign(grabbed_object.global_position.z)
+		grabbed_object_copy = grabbed_object.duplicate()
+		grabbed_object.add_child(grabbed_object_copy)
+		grabbed_object_origin = grabbed_object.global_position
 
 func get_grab_position():
 	var ro = get_viewport().get_camera_3d().project_ray_origin(mouse)
