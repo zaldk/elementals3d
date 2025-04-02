@@ -9,13 +9,14 @@ var grabbed_object_side = 0 # -1 is blue; 1 is green;
 var grab_distance = 1
 var grabbed_object_copy = null
 var grabbed_object_origin = Vector3()
+var elemental_base = preload("res://elemental_base.tscn")
 
 var cam_switch = false
 var cam_time = 0
 @export var cam_delta = 1000
 var cam_pos = Vector3()
 
-
+@onready var elementals = $Elementals
 @onready var cam = $Camera3D
 
 func norm(a: float, b: float, t: float) -> float:
@@ -62,6 +63,13 @@ func _input(event: InputEvent) -> void:
 					cam_switch = true
 					cam_time = Time.get_ticks_msec()
 					cam_pos = cam.global_position
+	if event is InputEventKey and event.is_pressed():
+		match event.keycode:
+			KEY_Q:
+				var new_elemental = elemental_base.instantiate()
+				elementals.add_child(new_elemental)
+				new_elemental.global_position = get_grab_position()
+		
 
 func update_grabbed_object(M: Vector2):
 	var space = get_world_3d().direct_space_state

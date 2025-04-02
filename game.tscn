@@ -1,7 +1,8 @@
-[gd_scene load_steps=10 format=3 uid="uid://dukrmnf3n78t3"]
+[gd_scene load_steps=11 format=3 uid="uid://dukrmnf3n78t3"]
 
 [ext_resource type="Script" path="res://game.gd" id="1_vx01h"]
 [ext_resource type="Shader" path="res://board.gdshader" id="2_8sx3c"]
+[ext_resource type="PackedScene" uid="uid://bdh1e7e7wu6n7" path="res://elemental_base.tscn" id="3_a3act"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_o0uog"]
 sky_horizon_color = Color(0.64625, 0.65575, 0.67075, 1)
@@ -66,8 +67,11 @@ use_collision = true
 size = Vector3(0.75, 0.75, 0.75)
 material = SubResource("StandardMaterial3D_wqvf2")
 
-[node name="Elemental2" type="CSGBox3D" parent="."]
+[node name="Elemental3" type="CSGBox3D" parent="Elementals"]
 transform = Transform3D(1, 8.6402e-12, 0, -3.31966e-11, 1, 1.16415e-10, -5.82077e-11, 1.16415e-10, 1, 1.5, 0.375, -2.5)
 use_collision = true
 size = Vector3(0.75, 0.75, 0.75)
 material = SubResource("StandardMaterial3D_pgp2b")
+
+[node name="ElementalBase" parent="Elementals" instance=ExtResource("3_a3act")]
+transform = Transform3D(1, 1.72804e-11, 1.00585e-21, -6.63932e-11, 1, 2.3283e-10, -1.16415e-10, 2.3283e-10, 1, 0.5, -0.625, 0.5)
