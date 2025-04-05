@@ -4,38 +4,75 @@ import "core:fmt"
 import "core:math"
 import rl "vendor:raylib"
 
-main :: proc() {
-    fmt.println("Hellope")
+Vec3 :: rl.Vector3
+Color :: rl.Color
 
+CAMERA : rl.Camera3D
+CAM_HEIGHT := 9 * math.sqrt(f32(8) / f32(7))
+CAM_SWITCH := false
+CAM_TIME : f32 = 0.0
+CAM_DELTA : f32 = 1000 // ms
+CAM_POS : [2]Vec3
+
+Element :: enum { Fire, Water, Earth, Wind, Energy, Nature }
+Elemental :: struct {
+    pos: [3]f32,
+    level: int,
+    type: Element,
+}
+ElementColor :: [Element]Color {
+    .Fire   = { 204,   0,   0, 255 },
+	.Nature = {   0, 204,   0, 255 },
+	.Water  = {   0,   0, 204, 255 },
+	.Energy = { 204,   0, 204, 255 },
+	.Earth  = {  51,  51,  51, 255 },
+	.Wind   = { 204, 204, 204, 255 },
+}
+
+Board :: struct {
+    elementals: [12][12]Elemental,
+    turn: int, // even=Blue odd=Green
+}
+
+main :: proc() {
     rl.SetConfigFlags({ .WINDOW_ALWAYS_RUN, .WINDOW_RESIZABLE, .MSAA_4X_HINT })
-    rl.InitWindow(1600, 1000, "FLOAT")
+    rl.InitWindow(1600, 1200, "FLOAT")
     defer rl.CloseWindow()
 
-    camera : rl.Camera3D
-    camera.position = { 6, 8, 6 }
-    camera.target = { 0, 0, 0 }
-    camera.up = { 0, 1, 0 }
-    camera.fovy = 15
-    camera.projection = .ORTHOGRAPHIC
+    CAMERA.position = { 6, CAM_HEIGHT, 6 }
+    CAMERA.target = { 0, 0, 0 }
+    CAMERA.up = { 0, 1, 0 }
+    CAMERA.fovy = 15
+    CAMERA.projection = .ORTHOGRAPHIC
 
-    cubePosition := rl.Vector3{ 0.5, 0.5, 0.5 }
-    cubeSize := rl.Vector3{1,1,1}
+    board := new_board()
 
     for !rl.WindowShouldClose() {
 
-        angle := math.mod(rl.GetTime(), math.TAU * 10) / 10
-        // camera.position = { f32(math.cos(angle)), 1, f32(math.sin(angle)) } * 4
+        if CAM_SWITCH {
+            t := math.unlerp(CAM_TIME, CAM_TIME+CAM_DELTA, f32(rl.GetTime() * 1000))
+            if t >= 0 && t <= 1 {
+                angle := math.PI/4 + math.PI * smotherstep(t)
+                if CAM_POS.x.x < 0 { angle += math.PI }
+                CAMERA.position.xz = { f32(math.cos(angle)), f32(math.sin(angle)) } * 6 * math.SQRT_TWO
+                CAMERA.position.y = CAM_HEIGHT
+            } else {
+                CAM_SWITCH = false
+            }
+        } else if rl.IsMouseButtonPressed(.MIDDLE) {
+            CAM_SWITCH = true
+            CAM_TIME = f32(rl.GetTime() * 1000)
+            CAM_POS.x = CAMERA.position
+            CAM_POS.y = CAMERA.position * {-1, 1, -1}
+        }
 
         rl.BeginDrawing()
-        rl.ClearBackground({0x20, 0x20, 0x20, 0xFF})
         {
-            rl.BeginMode3D(camera)
-            rl.DrawGrid(12, 1);
+            rl.ClearBackground({0,0,0,255})
+            rl.DrawFPS(0,0)
+            rl.BeginMode3D(CAMERA)
 
-            rl.DrawCubeV(cubePosition, cubeSize, {255, 0, 0, 127});
-            rl.DrawCubeWiresV(cubePosition, cubeSize, rl.RAYWHITE);
-
-            draw_board_plane()
+            draw_board(board)
 
             rl.EndMode3D()
         }
@@ -43,13 +80,90 @@ main :: proc() {
     }
 }
 
+new_board :: proc() -> Board {
+    return Board{}
+}
+
+draw_board :: proc(board: Board) {
+    // draw_board_plane()
+
+    // pos := Vec3{3.5, 0.75/2, 0.5}
+    // size := Vec3{1,1,1} * 0.75
+    pos := Vec3{0,0,0}
+    size := Vec3{6, 6, 6}
+    collision := raytrace(pos-size/2, pos+size/2)
+    if collision.hit {
+        // rl.DrawLine3D(collision.point, collision.point + collision.normal, {0, 255, 0, 255})
+        draw_wireframe(pos, size, 1, { 0, 255, 0, 255 });
+    }
+    rl.DrawCubeV(pos, size, {255, 0, 0, 255});
+    rl.DrawCubeWiresV(pos, size, {255, 0, 0, 255});
+}
+
 draw_board_plane :: proc() {
     cell_height :: 0.01
+    cell_size := Vec3{1, cell_height, 1}
     for i in -6..<6 {
         for j in -6..<6 {
-            col : rl.Color = {0, 0, 0, 255}
-            if j < 0 { col.g = 255 } else { col.b = 255 }
-            rl.DrawCubeV({f32(i), -cell_height/2, f32(j)} + {0.5,0,0.5}, {1, cell_height, 1}, col)
+            col : Color = {0, 0, 0, 255}
+            if j < 0 { col.g = 0xC0 } else { col.b = 0xF0 }
+            if (i + j) % 2 == 0 { col.rgb = (col.rgb / 10) * 9 }
+            cell_pos := Vec3{f32(i), -cell_height/2, f32(j)} + {0.5, 0, 0.5}
+            rl.DrawCubeV(cell_pos, cell_size, col)
         }
     }
+}
+
+draw_wireframe :: proc(pos, size: Vec3, girth: f32, color: Color) {
+    vs := [8]Vec3{ // vertices
+        pos + size / 2 * { -1, -1, -1 },
+        pos + size / 2 * { +1, -1, -1 },
+        pos + size / 2 * { -1, +1, -1 },
+        pos + size / 2 * { +1, +1, -1 },
+        pos + size / 2 * { -1, -1, +1 },
+        pos + size / 2 * { +1, -1, +1 },
+        pos + size / 2 * { -1, +1, +1 },
+        pos + size / 2 * { +1, +1, +1 },
+    }
+
+    es := [12][2]Vec3{ // edges
+        { vs[0], vs[1] },
+        { vs[2], vs[3] },
+        { vs[4], vs[5] },
+        { vs[6], vs[7] },
+
+        { vs[0], vs[2] },
+        { vs[1], vs[3] },
+        { vs[4], vs[6] },
+        { vs[5], vs[7] },
+
+        { vs[0], vs[4] },
+        { vs[1], vs[5] },
+        { vs[2], vs[6] },
+        { vs[3], vs[7] },
+    }
+
+    ps : [12]Vec3 // points
+    for e, i in es { ps[i] = (e.x + e.y) / 2 }
+
+    ss : [3]Vec3 // sizes
+    ss[0] = { size.x, 0, 0 } + { -1, 1, 1 } * girth
+    ss[1] = { 0, size.y, 0 } + { 1, -1, 1 } * girth
+    ss[2] = { 0, 0, size.z } + { 1, 1, -1 } * girth
+
+    for p, i in ps {
+        rl.DrawCubeV(p, ss[i/4], color)
+        rl.DrawCubeWiresV(p, ss[i/4], {0, 0, 0, 255});
+    }
+}
+
+raytrace :: proc(min_bound, max_bound: Vec3) -> rl.RayCollision {
+    return rl.GetRayCollisionBox(rl.GetScreenToWorldRay(rl.GetMousePosition(), CAMERA), {min_bound, max_bound})
+}
+
+lerp :: proc{ math.lerp, lerp_Vec3 }
+lerp_Vec3 :: proc(a, b: Vec3, t: f32) -> Vec3 { return a * (1 - t) + b * t }
+
+smotherstep :: proc(x: f32) -> f32 {
+    return x * x * x * (x * (6 * x - 15) + 10)
 }
