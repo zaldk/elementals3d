@@ -2,10 +2,14 @@ package elementals
 
 import "core:fmt"
 import "core:math"
+import "core:math/rand"
 import rl "vendor:raylib"
 
+randf :: rand.float32
 Vec3 :: rl.Vector3
 Color :: rl.Color
+
+EPSILON :: 0.001
 
 CAMERA : rl.Camera3D
 CAM_HEIGHT := 9 * math.sqrt(f32(8) / f32(7))
@@ -14,13 +18,20 @@ CAM_TIME : f32 = 0.0
 CAM_DELTA : f32 = 1000 // ms
 CAM_POS : [2]Vec3
 
+SELECTED_ELEMENTAL : ^Elemental
+HOVERED_ELEMENTAL : ^Elemental
+
+CellType :: enum { None, Block, Elemental }
 Element :: enum { Fire, Water, Earth, Wind, Energy, Nature }
 Elemental :: struct {
-    pos: [3]f32,
-    level: int,
-    type: Element,
+    pos: Vec3,
+    size: Vec3,
+    type: CellType,
+    element: Element,
+
+    // level: int,
 }
-ElementColor :: [Element]Color {
+ElementColor := [Element]Color{
     .Fire   = { 204,   0,   0, 255 },
 	.Nature = {   0, 204,   0, 255 },
 	.Water  = {   0,   0, 204, 255 },
@@ -38,6 +49,7 @@ main :: proc() {
     rl.SetConfigFlags({ .WINDOW_ALWAYS_RUN, .WINDOW_RESIZABLE, .MSAA_4X_HINT })
     rl.InitWindow(1600, 1200, "FLOAT")
     defer rl.CloseWindow()
+    rl.SetTargetFPS(120)
 
     CAMERA.position = { 6, CAM_HEIGHT, 6 }
     CAMERA.target = { 0, 0, 0 }
@@ -80,24 +92,33 @@ main :: proc() {
     }
 }
 
-new_board :: proc() -> Board {
-    return Board{}
+new_board :: proc() -> (board: Board) {
+    for i in 0..<12 {
+        for j in 0..<12 {
+            if randf() < 0.33 { continue }
+            board.elementals[i][j].type = .Elemental
+            board.elementals[i][j].pos = {f32(i-6)+0.5, 0.375, f32(j-6)+0.5}
+            board.elementals[i][j].size = {1, 1, 1} * 0.75
+            board.elementals[i][j].element = rand.choice_enum(Element)
+        }
+    }
+
+    return
 }
 
 draw_board :: proc(board: Board) {
-    // draw_board_plane()
+    draw_board_plane()
 
-    // pos := Vec3{3.5, 0.75/2, 0.5}
-    // size := Vec3{1,1,1} * 0.75
-    pos := Vec3{0,0,0}
-    size := Vec3{6, 6, 6}
-    collision := raytrace(pos-size/2, pos+size/2)
-    if collision.hit {
-        // rl.DrawLine3D(collision.point, collision.point + collision.normal, {0, 255, 0, 255})
-        draw_wireframe(pos, size, 1, { 0, 255, 0, 255 });
+    for i in 0..<12 {
+        for j in 0..<12 {
+            if board.elementals[i][j].type == .None { continue }
+            e := board.elementals[i][j]
+            collision := raytrace(e.pos - e.size/2, e.pos + e.size/2)
+            if collision.hit { draw_wireframe(e.pos, e.size, 0.1, { 127, 127, 127, 255 }) }
+            rl.DrawCubeV(e.pos, e.size, ElementColor[e.element])
+            rl.DrawCubeWiresV(e.pos, e.size, {0,0,0,255})
+        }
     }
-    rl.DrawCubeV(pos, size, {255, 0, 0, 255});
-    rl.DrawCubeWiresV(pos, size, {255, 0, 0, 255});
 }
 
 draw_board_plane :: proc() {
@@ -147,9 +168,9 @@ draw_wireframe :: proc(pos, size: Vec3, girth: f32, color: Color) {
     for e, i in es { ps[i] = (e.x + e.y) / 2 }
 
     ss : [3]Vec3 // sizes
-    ss[0] = { size.x, 0, 0 } + { -1, 1, 1 } * girth
-    ss[1] = { 0, size.y, 0 } + { 1, -1, 1 } * girth
-    ss[2] = { 0, 0, size.z } + { 1, 1, -1 } * girth
+    ss[0] = { size.x, 0, 0 } + girth // * { -1, 1, 1 }
+    ss[1] = { 0, size.y, 0 } + girth // * { 1, -1, 1 }
+    ss[2] = { 0, 0, size.z } + girth // * { 1, 1, -1 }
 
     for p, i in ps {
         rl.DrawCubeV(p, ss[i/4], color)
@@ -166,4 +187,19 @@ lerp_Vec3 :: proc(a, b: Vec3, t: f32) -> Vec3 { return a * (1 - t) + b * t }
 
 smotherstep :: proc(x: f32) -> f32 {
     return x * x * x * (x * (6 * x - 15) + 10)
+}
+
+equal_floor :: proc(a, b: Vec3) -> bool {
+    c : Vec3 = {math.floor(a.x), math.floor(a.y), math.floor(a.z)} - {math.floor(b.x), math.floor(b.y), math.floor(b.z)}
+    c.x = math.abs(c.x)
+    c.y = math.abs(c.y)
+    c.z = math.abs(c.z)
+    return c.x <= EPSILON && c.y <= EPSILON && c.z <= EPSILON
+}
+equal :: proc(a, b: Vec3) -> bool {
+    c := a-b
+    c.x = math.abs(c.x)
+    c.y = math.abs(c.y)
+    c.z = math.abs(c.z)
+    return c.x <= EPSILON && c.y <= EPSILON && c.z <= EPSILON
 }
