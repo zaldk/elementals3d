@@ -129,7 +129,11 @@ draw_board_plane :: proc() {
             col : Color = {0, 0, 0, 255}
             if j < 0 { col.g = 0xC0 } else { col.b = 0xF0 }
             if (i + j) % 2 == 0 { col.rgb = (col.rgb / 10) * 9 }
+
             cell_pos := Vec3{f32(i), -cell_height/2, f32(j)} + {0.5, 0, 0.5}
+            collision := raytrace(cell_pos - cell_size/2, cell_pos + cell_size/2)
+            if collision.hit { draw_wireframe(cell_pos, cell_size, 0.1, { 127, 127, 127, 255 }) }
+
             rl.DrawCubeV(cell_pos, cell_size, col)
         }
     }
@@ -190,11 +194,12 @@ smotherstep :: proc(x: f32) -> f32 {
 }
 
 equal_floor :: proc(a, b: Vec3) -> bool {
-    c : Vec3 = {math.floor(a.x), math.floor(a.y), math.floor(a.z)} - {math.floor(b.x), math.floor(b.y), math.floor(b.z)}
-    c.x = math.abs(c.x)
-    c.y = math.abs(c.y)
-    c.z = math.abs(c.z)
-    return c.x <= EPSILON && c.y <= EPSILON && c.z <= EPSILON
+    for i in 0..<3 {
+        if math.abs(math.floor(a[i]) - math.floor(b[i])) >= EPSILON {
+            return false
+        }
+    }
+    return true
 }
 equal :: proc(a, b: Vec3) -> bool {
     c := a-b
