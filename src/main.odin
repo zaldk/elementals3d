@@ -1,31 +1,40 @@
 package elementals
 
 import "core:fmt"
+import "core:strings"
 import "core:math"
 import "core:math/rand"
 import "core:mem"
+import "base:intrinsics"
 import rl "vendor:raylib"
 
 Vec3 :: rl.Vector3
 Color :: rl.Color
 
+BLACK :: Color{0,0,0,255}
+
 ENABLED_SHADERS :: #config(SHADERS, false)
 TARGET_FPS :: 90
 EPSILON :: 0.001
-WIRE_GIRTH :: 0.1
-CELL_SIZE :: Vec3{ 0.5, 0.5, 0.5 }
-CELL_POS :: proc(i,j: int) -> Vec3 { return { f32(i-6)+0.5, (CELL_SIZE.y+WIRE_GIRTH)/2, f32(j-6)+0.5 } }
+CELL_SIZE :: proc(level := 1) -> Vec3 { return {1, 0.75, 1} * 0.5 * math.pow(f32(level), 0.2) }
+CELL_POS :: proc(i,j: int, level := 1) -> Vec3 {
+    return {
+        f32(i-6)+0.5,
+        CELL_SIZE(level).y / 2,
+        f32(j-6)+0.5,
+    }
+}
 
 CAMERA : rl.Camera3D
 CAM_HEIGHT := 9 * math.sqrt(f32(8) / f32(7))
 CAM_SWITCH := false
 CAM_TIME : f32 = 0.0
 CAM_DELTA : f32 = 1000 // ms
-CAM_POS : [2]Vec3
+CAM_POS : Vec3
 
 COLLISION := rl.RayCollision{ distance = math.F32_MAX }
-SELECTED_ELEMENTAL : ^Elemental
-HOVERED_ELEMENTAL : ^Elemental
+SELECTED_CELL := [2]int{-1, -1}
+HOVERING_CELL := [2]int{-1, -1}
 
 Box :: struct {
     pos: Vec3,
@@ -33,19 +42,18 @@ Box :: struct {
 }
 
 ElementColor := [Element][2]Color{
-	.Wind   = {{ 0x06, 0xb6, 0xd4, 0xFF }, { 0x7d, 0xd3, 0xfc, 0xFF }},
-    .Fire   = {{ 0xfb, 0x92, 0x3c, 0xFF }, { 0xdc, 0x26, 0x26, 0xFF }},
-	.Earth  = {{ 0x71, 0x71, 0x7a, 0xFF }, { 0x3f, 0x3f, 0x46, 0xFF }},
-	.Water  = {{ 0x0e, 0xa5, 0xe9, 0xFF }, { 0x25, 0x63, 0xeb, 0xFF }},
-	.Nature = {{ 0x22, 0xc5, 0x5e, 0xFF }, { 0x0d, 0x94, 0x88, 0xFF }},
-	.Energy = {{ 0xd9, 0x46, 0xef, 0xFF }, { 0x6d, 0x28, 0xd9, 0xFF }},
+	.Wind   = {{ 0x06, 0xB6, 0xD4, 0xFF }, { 0x7D, 0xD3, 0xFC, 0xFF }},
+    .Fire   = {{ 0xFB, 0x92, 0x3C, 0xFF }, { 0xDC, 0x26, 0x26, 0xFF }},
+	.Rock  = {{ 0x71, 0x71, 0x7A, 0xFF }, { 0x3F, 0x3F, 0x46, 0xFF }},
+	.Water  = {{ 0x0E, 0xA5, 0xE9, 0xFF }, { 0x25, 0x63, 0xEB, 0xFF }},
+	.Nature = {{ 0x22, 0xC5, 0x5E, 0xFF }, { 0x0D, 0x94, 0x88, 0xFF }},
+	.Energy = {{ 0xD9, 0x46, 0xEF, 0xFF }, { 0x6D, 0x28, 0xD9, 0xFF }},
 }
-Element :: enum { Fire, Water, Earth, Wind, Energy, Nature }
+Element :: enum { Fire, Water, Rock, Wind, Energy, Nature }
 Elemental :: struct {
     type: Element,
     level: int,
 }
-
 Block :: struct {}
 Empty :: struct {}
 
@@ -56,13 +64,15 @@ CellData :: union #no_nil {
 }
 
 Cell :: struct {
-    data: CellData,
     aabb: Box,
+    data: CellData,
 }
 
+PlayerType :: enum { Blue, Green }
 Tile :: struct {
     aabb: Box,
     color: Color,
+    player: PlayerType,
 }
 
 Board :: struct {
@@ -73,6 +83,7 @@ Board :: struct {
 
 main :: proc() {
     // {{{
+    // {{{ Tracking + Temp. Allocator
     // track my faulty programming
     // taken from youtube.com/watch?v=dg6qogN8kIE
     default_allocator := context.allocator
@@ -88,9 +99,10 @@ main :: proc() {
         }
         mem.tracking_allocator_clear(&tracking_allocator)
     }
+    defer free_all(context.temp_allocator)
+    // }}}
 
-
-
+    // {{{ Initial Variables
     rl.SetConfigFlags({ .WINDOW_ALWAYS_RUN, .WINDOW_RESIZABLE, .MSAA_4X_HINT })
     rl.InitWindow(1600, 1200, "FLOAT")
     defer rl.CloseWindow()
@@ -113,38 +125,11 @@ main :: proc() {
     }
 
     board := new_board()
+    // }}}
+
+    // {{{ The Game Loop
     for !rl.WindowShouldClose() {
-
-        if CAM_SWITCH {
-            t := math.unlerp(CAM_TIME, CAM_TIME+CAM_DELTA, f32(rl.GetTime() * 1000))
-            if t >= 0 && t <= 1 {
-                angle := math.PI/4 + math.PI * smotherstep(t)
-                if CAM_POS.x.x < 0 { angle += math.PI }
-                CAMERA.position.xz = { f32(math.cos(angle)), f32(math.sin(angle)) } * 6 * math.SQRT_TWO
-                CAMERA.position.y = CAM_HEIGHT
-            } else {
-                CAM_SWITCH = false
-            }
-        } else if rl.IsMouseButtonPressed(.MIDDLE) {
-            CAM_SWITCH = true
-            CAM_TIME = f32(rl.GetTime() * 1000)
-            CAM_POS.x = CAMERA.position
-            CAM_POS.y = CAMERA.position * {-1, 1, -1}
-        }
-
-        if rl.GetKeyPressed() == .Q {
-            board = new_board()
-        }
-
-        switch {
-            case rl.GetMouseWheelMoveV().y < 0: CAMERA.fovy *= 1.1
-            case rl.GetMouseWheelMoveV().y > 0: CAMERA.fovy *= 0.9
-        }
-
-        when ENABLED_SHADERS {
-            rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), rl.ShaderUniformDataType.VEC3);
-        }
-
+        // {{{ Collision Calculation
         COLLISION = rl.RayCollision{ distance = math.F32_MAX }
         for i in 0..<12 {
             for j in 0..<12 {
@@ -174,48 +159,104 @@ main :: proc() {
                 }
             }
         }
+        // }}}
+        if COLLISION.hit {
+            i, j := point2grid(COLLISION.point)
+            HOVERING_CELL = {i,j}
+        }
 
-        rl.BeginDrawing()
-        {
+        // {{{ Input + Animations
+        if CAM_SWITCH {
+            t := math.unlerp(CAM_TIME, CAM_TIME+CAM_DELTA, f32(rl.GetTime() * 1000))
+            if t >= 0 && t <= 1 {
+                angle := math.PI/4 + math.PI * math.smoothstep(f32(0),1,t)
+                if CAM_POS.x < 0 { angle += math.PI }
+                CAMERA.position.xz = { f32(math.cos(angle)), f32(math.sin(angle)) } * 6 * math.SQRT_TWO
+                CAMERA.position.y = CAM_HEIGHT
+            } else { CAM_SWITCH = false }
+        } else if rl.IsMouseButtonPressed(.MIDDLE) {
+            CAM_SWITCH = true
+            CAM_TIME = f32(rl.GetTime() * 1000)
+            CAM_POS = CAMERA.position
+        }
+
+        if rl.GetMouseWheelMoveV().y < 0 { CAMERA.fovy *= 1.1 }
+        if rl.GetMouseWheelMoveV().y > 0 { CAMERA.fovy *= 0.9 }
+
+        when ENABLED_SHADERS { rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), rl.ShaderUniformDataType.VEC3); }
+
+        if rl.GetKeyPressed() == .Q { board = new_board() }
+
+        if rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
+            if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
+                if _, ok1 := board.cells[HOVERING_CELL.x][HOVERING_CELL.y].data.(Empty); ok1 {
+                    if _, ok2 := board.cells[SELECTED_CELL.x][SELECTED_CELL.y].data.(Elemental); ok2 {
+                        board.cells[HOVERING_CELL.x][HOVERING_CELL.y] = board.cells[SELECTED_CELL.x][SELECTED_CELL.y]
+                        board.cells[SELECTED_CELL.x][SELECTED_CELL.y] = Cell{}
+                        fmt.printfln("Swapped %v <- %v", HOVERING_CELL, SELECTED_CELL)
+                    }
+                }
+            }
+
+            if equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
+                SELECTED_CELL = {-1,-1}
+            } else {
+                SELECTED_CELL = HOVERING_CELL
+            }
+        }
+        // }}}
+
+        debug_info : [2]string
+        if valid(SELECTED_CELL) { debug_info[0] = fmt.tprintf("Selected: %v %v", SELECTED_CELL, board.cells[SELECTED_CELL.x][SELECTED_CELL.y].data) }
+        if valid(HOVERING_CELL) { debug_info[1] = fmt.tprintf("Hovering: %v %v", HOVERING_CELL, board.cells[HOVERING_CELL.x][HOVERING_CELL.y].data) }
+
+        // {{{ Draw Calls
+        rl.BeginDrawing(); {
             rl.ClearBackground({0,0,0,255})
             rl.DrawFPS(0,0)
 
-            rl.BeginMode3D(CAMERA)
-            when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
+            rl.BeginMode3D(CAMERA); {
+                when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
 
-            draw_board(board)
-            if COLLISION.hit {
-                p := floor(COLLISION.point)
-                p.y = 0.5
-                rl.DrawCubeV(p + {0.5,0,0.5}, {1,1,1}, {255,255,255,51})
+                draw_board(&board)
+
+                when ENABLED_SHADERS { rl.EndShaderMode(); }
+            }; rl.EndMode3D()
+
+            for ostr, i in debug_info[:] {
+                cstr := strings.clone_to_cstring(ostr)
+                defer delete(cstr)
+                rl.DrawText(cstr, 20, 20 + 40*i32(i), 20, rl.RAYWHITE)
             }
-
-            when ENABLED_SHADERS { rl.EndShaderMode(); }
-            rl.EndMode3D()
-        }
-        rl.EndDrawing()
+        }; rl.EndDrawing()
+        // }}}
     }
+    // }}}
     // }}}
 }
 
 new_board :: proc() -> (board: Board) {
     // {{{
     tile_height :: 0.01
+    levels := [?]int{1, 2, 3}
     for i in 0..<12 {
         for j in 0..<12 {
             tile_color : Color = {0, 0, 0, 255}
-            if j < 6 { tile_color.g = 0xC0 } else { tile_color.b = 0xF0 }
+            if j < 6 { tile_color.g = 0xA0 } else { tile_color.b = 0xF0 }
             if (i + j) % 2 == 0 { tile_color.rgb = (tile_color.rgb / 10) * 9 }
             board.tiles[i][j].aabb.pos = Vec3{f32(i), -tile_height/2, f32(j)} + {-5.5, 0, -5.5}
             board.tiles[i][j].aabb.size = Vec3{1, tile_height, 1}
             board.tiles[i][j].color = tile_color
+            board.tiles[i][j].player = PlayerType(j/6)
 
             r := rand.float32()
             switch {
             case r < 0.25: {
-                board.cells[i][j].data = Elemental{ type = rand.choice_enum(Element), level = 1 }
-                board.cells[i][j].aabb.pos = CELL_POS(i,j)
-                board.cells[i][j].aabb.size = CELL_SIZE
+                type := rand.choice_enum(Element)
+                level := rand.choice(levels[:])
+                board.cells[i][j].data = Elemental{ type, level }
+                board.cells[i][j].aabb.pos = CELL_POS(i, j, level)
+                board.cells[i][j].aabb.size = CELL_SIZE(level)
             }
             // case r < 0.5: { board.cells[i][j].data = Block{} }
             }
@@ -226,12 +267,12 @@ new_board :: proc() -> (board: Board) {
     // }}}
 }
 
-draw_board :: proc(board: Board) {
+draw_board :: proc(board: ^Board) {
     // {{{
     for i in 0..<12 {
         for j in 0..<12 {
             tile := board.tiles[i][j]
-            rl.DrawCubeV(tile.aabb.pos, tile.aabb.size, tile.color)
+            draw_cube(tile.aabb.pos, tile.aabb.size, tile.color)
         }
     }
 
@@ -241,11 +282,8 @@ draw_board :: proc(board: Board) {
             case Empty: continue
             case Block: panic("\n\tTODO: implement Block rendering")
             case Elemental: {
-                e := board.cells[i][j].aabb
-                rl.DrawCubeV(e.pos, e.size, ElementColor[data.type][0])
-                rand.reset(u64(i * 12 + j + 1000))
-                mults := [?]f32{0.5, 1, 1.5, 2}
-                draw_wireframe(e.pos, e.size, WIRE_GIRTH * rand.choice(mults[:]), ElementColor[data.type][1])
+                aabb := board.cells[i][j].aabb
+                draw_elemental(aabb, data)
             }
             }
         }
@@ -253,81 +291,77 @@ draw_board :: proc(board: Board) {
     // }}}
 }
 
-draw_wireframe :: proc(pos, size: Vec3, girth: f32, color: Color, recurse := true) {
+draw_elemental :: proc(aabb: Box, data: Elemental) {
     // {{{
-    vs := [8]Vec3{ // vertices
-        pos + size / 2 * { -1, -1, -1 },
-        pos + size / 2 * { +1, -1, -1 },
-        pos + size / 2 * { -1, +1, -1 },
-        pos + size / 2 * { +1, +1, -1 },
-        pos + size / 2 * { -1, -1, +1 },
-        pos + size / 2 * { +1, -1, +1 },
-        pos + size / 2 * { -1, +1, +1 },
-        pos + size / 2 * { +1, +1, +1 },
+    BUMP : f32 : 0.05
+    draw_cube(aabb.pos, aabb.size, ElementColor[data.type][1])
+    draw_cube_wires(aabb.pos, aabb.size, ElementColor[data.type][0])
+
+    for i in 0..<data.level {
+        for j in 0..<data.level {
+            dot_pos, dot_size : Vec3
+
+            dot_pos.x = (aabb.pos.x - aabb.size.x/2) + aabb.size.x / f32(data.level) * (f32(j) + 0.5)
+            dot_pos.y = aabb.pos.y + aabb.size.y/2 + BUMP/2
+            dot_pos.z = (aabb.pos.z - aabb.size.z/2) + aabb.size.z / f32(data.level) * (f32(i) + 0.5)
+
+            dot_size = aabb.size * 0.75 / f32(data.level)
+            dot_size.y = BUMP
+
+            draw_cube(dot_pos, dot_size, ElementColor[data.type][0])
+            draw_cube_wires(dot_pos, dot_size, ElementColor[data.type][1])
+        }
     }
-
-    es := [12][2]Vec3{ // edges
-        { vs[0], vs[1] },
-        { vs[2], vs[3] },
-        { vs[4], vs[5] },
-        { vs[6], vs[7] },
-
-        { vs[0], vs[2] },
-        { vs[1], vs[3] },
-        { vs[4], vs[6] },
-        { vs[5], vs[7] },
-
-        { vs[0], vs[4] },
-        { vs[1], vs[5] },
-        { vs[2], vs[6] },
-        { vs[3], vs[7] },
-    }
-
-    ps : [12]Vec3 // points
-    for e, i in es { ps[i] = (e.x + e.y) / 2 }
-
-    ss : [3]Vec3 // sizes
-    ss[0] = { size.x, 0, 0 } + girth // * { -1, 1, 1 }
-    ss[1] = { 0, size.y, 0 } + girth // * { 1, -1, 1 }
-    ss[2] = { 0, 0, size.z } + girth // * { 1, 1, -1 }
-
-    for p, i in ps {
-        rl.DrawCubeV(p, ss[i/4], color)
-        rl.DrawCubeWiresV(p, ss[i/4], {0, 0, 0, 255});
-    }
-    // rl.DrawCubeWiresV(pos, size+0.1, {0, 0, 0, 255}, false);
-    // if recurse { draw_wireframe(pos, size+0.1, WIRE_GIRTH/5, {0,0,0,255}, false) }
     // }}}
 }
+
+draw_cube :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeV(pos, size, color) }
+draw_cube_wires :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeWiresV(pos, size, color) }
 
 raytrace :: proc(min_bound, max_bound: Vec3) -> rl.RayCollision {
     return rl.GetRayCollisionBox(rl.GetScreenToWorldRay(rl.GetMousePosition(), CAMERA), {min_bound, max_bound})
 }
 
+point2grid :: proc(point: Vec3) -> (i, j: int) {
+    p := floor(point)
+    i = math.clamp(int(p.x) + 6, 0, 11)
+    j = math.clamp(int(p.z) + 6, 0, 11)
+    return
+}
+
 lerp :: proc{ math.lerp, lerp_Vec3 }
 lerp_Vec3 :: proc(a, b: Vec3, t: f32) -> Vec3 { return a * (1 - t) + b * t }
 
-smotherstep :: proc(x: f32) -> f32 {
-    return x * x * x * (x * (6 * x - 15) + 10)
-}
+smootherstep :: proc(x: f32) -> f32 { return x * x * x * (x * (6 * x - 15) + 10) }
 
 floor :: proc{ floor_Vec3 }
-floor_Vec3 :: proc(v: Vec3) -> Vec3 {
-    return Vec3{ math.floor(v.x), math.floor(v.y), math.floor(v.z) }
-}
+floor_Vec3 :: proc(v: Vec3) -> Vec3 { return { math.floor(v.x), math.floor(v.y), math.floor(v.z) } }
 
-equal_floor :: proc(a, b: Vec3) -> bool {
-    for i in 0..<3 {
-        if math.abs(math.floor(a[i]) - math.floor(b[i])) >= EPSILON {
+equal :: proc { equal_Vec3, equal_Box, equal_Array }
+equal_Box :: proc(a, b: Box) -> bool {
+    return equal(a.pos, b.pos) && equal(a.size, b.size)
+}
+equal_Array :: proc(a, b: $T/[]$E) -> bool where intrinsics.type_is_numeric(E) {
+    for i in 0..<len(a) {
+        if math.abs(f32(a[i]) - f32(b[i])) > EPSILON {
             return false
         }
     }
     return true
 }
-equal :: proc(a, b: Vec3) -> bool {
-    c := a-b
-    c.x = math.abs(c.x)
-    c.y = math.abs(c.y)
-    c.z = math.abs(c.z)
-    return c.x <= EPSILON && c.y <= EPSILON && c.z <= EPSILON
+equal_Vec3 :: proc(a, b: Vec3) -> bool {
+    return math.abs(a.x - b.x) <= EPSILON &&
+           math.abs(a.y - b.y) <= EPSILON &&
+           math.abs(a.z - b.z) <= EPSILON
+}
+equal_floor :: proc(a, b: Vec3) -> bool {
+    return math.abs(math.floor(a.x) - math.floor(b.x)) <= EPSILON &&
+           math.abs(math.floor(a.y) - math.floor(b.y)) <= EPSILON &&
+           math.abs(math.floor(a.z) - math.floor(b.z)) <= EPSILON
+}
+
+valid :: proc(grid_pos: [2]int) -> bool {
+    return grid_pos.x != -1 && grid_pos.y != -1 &&
+           grid_pos.x >=  0 && grid_pos.y <= 11 &&
+           grid_pos.x >=  0 && grid_pos.y <= 11
 }
