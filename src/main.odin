@@ -3,11 +3,13 @@ package elementals
 import "core:fmt"
 import "core:math"
 import "core:math/rand"
+import "core:mem"
 import rl "vendor:raylib"
 
 Vec3 :: rl.Vector3
 Color :: rl.Color
 
+ENABLED_SHADERS :: #config(SHADERS, false)
 TARGET_FPS :: 90
 EPSILON :: 0.001
 WIRE_GIRTH :: 0.1
@@ -21,7 +23,7 @@ CAM_TIME : f32 = 0.0
 CAM_DELTA : f32 = 1000 // ms
 CAM_POS : [2]Vec3
 
-COLLISION : rl.RayCollision
+COLLISION := rl.RayCollision{ distance = math.F32_MAX }
 SELECTED_ELEMENTAL : ^Elemental
 HOVERED_ELEMENTAL : ^Elemental
 
@@ -47,7 +49,7 @@ Elemental :: struct {
 Block :: struct {}
 Empty :: struct {}
 
-CellData :: union {
+CellData :: union #no_nil {
     Empty,
     Block,
     Elemental,
@@ -71,6 +73,24 @@ Board :: struct {
 
 main :: proc() {
     // {{{
+    // track my faulty programming
+    // taken from youtube.com/watch?v=dg6qogN8kIE
+    default_allocator := context.allocator
+    tracking_allocator : mem.Tracking_Allocator
+    mem.tracking_allocator_init(&tracking_allocator, default_allocator)
+    context.allocator = mem.tracking_allocator(&tracking_allocator)
+    defer {
+        for key, value in tracking_allocator.allocation_map {
+            fmt.printfln("[%v] %v leaked %v bytes", key, value.location, value.size)
+        }
+        for value in tracking_allocator.bad_free_array {
+            fmt.printfln("[%v] %v double free detected", value.memory, value.location)
+        }
+        mem.tracking_allocator_clear(&tracking_allocator)
+    }
+
+
+
     rl.SetConfigFlags({ .WINDOW_ALWAYS_RUN, .WINDOW_RESIZABLE, .MSAA_4X_HINT })
     rl.InitWindow(1600, 1200, "FLOAT")
     defer rl.CloseWindow()
@@ -82,8 +102,17 @@ main :: proc() {
     CAMERA.fovy = 15
     CAMERA.projection = .ORTHOGRAPHIC
 
-    board := new_board()
+    when ENABLED_SHADERS {
+        shader := rl.LoadShader("src/resources/vertex.glsl", "src/resources/fragment.glsl")
+        defer rl.UnloadShader(shader)
+        shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW] = rl.GetShaderLocation(shader, "viewPos");
 
+        ambientLoc := rl.GetShaderLocation(shader, "ambient");
+        ambient_light := [4]f32{ 0.1, 0.1, 0.1, 1.0 }
+        rl.SetShaderValue(shader, ambientLoc, raw_data(ambient_light[:]), rl.ShaderUniformDataType.VEC4);
+    }
+
+    board := new_board()
     for !rl.WindowShouldClose() {
 
         if CAM_SWITCH {
@@ -103,14 +132,65 @@ main :: proc() {
             CAM_POS.y = CAMERA.position * {-1, 1, -1}
         }
 
+        if rl.GetKeyPressed() == .Q {
+            board = new_board()
+        }
+
+        switch {
+            case rl.GetMouseWheelMoveV().y < 0: CAMERA.fovy *= 1.1
+            case rl.GetMouseWheelMoveV().y > 0: CAMERA.fovy *= 0.9
+        }
+
+        when ENABLED_SHADERS {
+            rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), rl.ShaderUniformDataType.VEC3);
+        }
+
+        COLLISION = rl.RayCollision{ distance = math.F32_MAX }
+        for i in 0..<12 {
+            for j in 0..<12 {
+                tile := board.tiles[i][j].aabb
+                tile_collision := raytrace(tile.pos - tile.size/2, tile.pos + tile.size/2)
+
+                cell := board.cells[i][j].aabb
+                cell_collision := tile_collision
+                if _, ok := board.cells[i][j].data.(Elemental); ok {
+                    cell_collision = raytrace(cell.pos - cell.size/2, cell.pos + cell.size/2)
+                }
+
+                switch {
+                case !tile_collision.hit && !cell_collision.hit: continue
+
+                case !tile_collision.hit && cell_collision.hit:
+                    if COLLISION.distance > cell_collision.distance { COLLISION = cell_collision }
+
+                case tile_collision.hit && !cell_collision.hit:
+                    if COLLISION.distance > tile_collision.distance { COLLISION = tile_collision }
+
+                case tile_collision.hit && cell_collision.hit: {
+                    min_collision := tile_collision
+                    if min_collision.distance > cell_collision.distance { min_collision = cell_collision }
+                    if COLLISION.distance > min_collision.distance { COLLISION = min_collision }
+                }
+                }
+            }
+        }
+
         rl.BeginDrawing()
         {
             rl.ClearBackground({0,0,0,255})
             rl.DrawFPS(0,0)
+
             rl.BeginMode3D(CAMERA)
+            when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
 
             draw_board(board)
+            if COLLISION.hit {
+                p := floor(COLLISION.point)
+                p.y = 0.5
+                rl.DrawCubeV(p + {0.5,0,0.5}, {1,1,1}, {255,255,255,51})
+            }
 
+            when ENABLED_SHADERS { rl.EndShaderMode(); }
             rl.EndMode3D()
         }
         rl.EndDrawing()
@@ -130,10 +210,14 @@ new_board :: proc() -> (board: Board) {
             board.tiles[i][j].aabb.size = Vec3{1, tile_height, 1}
             board.tiles[i][j].color = tile_color
 
-            if rand.float32() < 0.25 {
+            r := rand.float32()
+            switch {
+            case r < 0.25: {
                 board.cells[i][j].data = Elemental{ type = rand.choice_enum(Element), level = 1 }
                 board.cells[i][j].aabb.pos = CELL_POS(i,j)
                 board.cells[i][j].aabb.size = CELL_SIZE
+            }
+            // case r < 0.5: { board.cells[i][j].data = Block{} }
             }
         }
     }
@@ -147,25 +231,21 @@ draw_board :: proc(board: Board) {
     for i in 0..<12 {
         for j in 0..<12 {
             tile := board.tiles[i][j]
-            collision := raytrace(tile.aabb.pos - tile.aabb.size/2, tile.aabb.pos + tile.aabb.size/2)
-            if collision.hit { draw_wireframe(tile.aabb.pos, tile.aabb.size, WIRE_GIRTH, { 127, 127, 127, 255 }) }
             rl.DrawCubeV(tile.aabb.pos, tile.aabb.size, tile.color)
         }
     }
-
 
     for i in 0..<12 {
         for j in 0..<12 {
             switch data in board.cells[i][j].data {
             case Empty: continue
-            case Block: {}
+            case Block: panic("\n\tTODO: implement Block rendering")
             case Elemental: {
                 e := board.cells[i][j].aabb
-                // collision := raytrace(e.pos - e.size/2, e.pos + e.size/2)
-                // if collision.hit { draw_wireframe(e.pos, e.size, 0.1, { 127, 127, 127, 255 }) }
                 rl.DrawCubeV(e.pos, e.size, ElementColor[data.type][0])
-                draw_wireframe(e.pos, e.size, WIRE_GIRTH, ElementColor[data.type][1])
-                // rl.DrawCubeWiresV(e.pos, e.size, {0,0,0,255})
+                rand.reset(u64(i * 12 + j + 1000))
+                mults := [?]f32{0.5, 1, 1.5, 2}
+                draw_wireframe(e.pos, e.size, WIRE_GIRTH * rand.choice(mults[:]), ElementColor[data.type][1])
             }
             }
         }
@@ -213,10 +293,10 @@ draw_wireframe :: proc(pos, size: Vec3, girth: f32, color: Color, recurse := tru
 
     for p, i in ps {
         rl.DrawCubeV(p, ss[i/4], color)
-        // rl.DrawCubeWiresV(p, ss[i/4], {0, 0, 0, 255});
+        rl.DrawCubeWiresV(p, ss[i/4], {0, 0, 0, 255});
     }
     // rl.DrawCubeWiresV(pos, size+0.1, {0, 0, 0, 255}, false);
-    if recurse { draw_wireframe(pos, size+0.1, WIRE_GIRTH/5, {0,0,0,255}, false) }
+    // if recurse { draw_wireframe(pos, size+0.1, WIRE_GIRTH/5, {0,0,0,255}, false) }
     // }}}
 }
 
@@ -229,6 +309,11 @@ lerp_Vec3 :: proc(a, b: Vec3, t: f32) -> Vec3 { return a * (1 - t) + b * t }
 
 smotherstep :: proc(x: f32) -> f32 {
     return x * x * x * (x * (6 * x - 15) + 10)
+}
+
+floor :: proc{ floor_Vec3 }
+floor_Vec3 :: proc(v: Vec3) -> Vec3 {
+    return Vec3{ math.floor(v.x), math.floor(v.y), math.floor(v.z) }
 }
 
 equal_floor :: proc(a, b: Vec3) -> bool {
