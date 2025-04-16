@@ -57,15 +57,12 @@ Elemental :: struct {
 Block :: struct {}
 Empty :: struct {}
 
-CellData :: union #no_nil {
-    Empty,
-    Block,
-    Elemental,
-}
+CellType :: enum { Empty, Block, Elemental, }
 
 Cell :: struct {
     aabb: Box,
-    data: CellData,
+    type: CellType,
+    data: Elemental,
 }
 
 PlayerType :: enum { Blue, Green }
@@ -80,10 +77,10 @@ Board :: struct {
     turn: int, // even=Blue odd=Green
 }
 
-ActionType :: enum { Move, Attack, Spell, Skip }
-Action :: struct {
-    type: ActionType,
-}
+// ActionType :: enum { Move, Attack, Spell, Skip }
+// Action :: struct {
+//     type: ActionType,
+// }
 
 AnimationType :: enum { Move, Attack, Spell }
 ANIMATION := struct {
@@ -158,8 +155,8 @@ main :: proc() {
                 tile_collision := raytrace(tile.pos - tile.size/2, tile.pos + tile.size/2)
 
                 cell_collision := tile_collision
-                if data, ok := BOARD.cells[i][j].data.(Elemental); ok {
-                    cell := get_cell_aabb(i, j, data.level)
+                if BOARD.cells[i][j].type == .Elemental {
+                    cell := get_cell_aabb(i, j, BOARD.cells[i][j].data.level)
                     cell_collision = raytrace(cell.pos - cell.size/2, cell.pos + cell.size/2)
                 }
 
@@ -184,25 +181,25 @@ main :: proc() {
         if COLLISION.hit {
             i, j := point2grid(COLLISION.point)
             HOVERING_CELL = {i,j}
-            if _, ok := BOARD.cells[i][j].data.(Elemental); ok {
+            if BOARD.cells[i][j].type == .Elemental {
                 rl.SetMouseCursor(.POINTING_HAND)
             }
         }
 
-        // {{{ Animations
+        // {{{ Animations + Logic
         if ANIMATION.active {
             switch ANIMATION.type {
             case .Move: {
                 assert(valid(ANIMATION.from))
                 cell_from := BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
-                data_from, ok_from := cell_from.data.(Elemental)
-                assert(ok_from, "FROM cell was not an Elemental")
+                assert(cell_from.type == .Elemental)
+                data_from := cell_from.data
                 aabb_from := get_cell_aabb(ANIMATION.from, data_from.level)
 
                 assert(valid(ANIMATION.to))
                 cell_to := BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
-                _, ok_to := cell_to.data.(Empty)
-                assert(ok_to, "TO cell was not an Empty")
+                assert(cell_to.type == .Empty)
+                data_to := cell_to.data
                 aabb_to := get_cell_aabb(ANIMATION.to, data_from.level)
 
                 t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
@@ -212,14 +209,49 @@ main :: proc() {
                 } else {
                     BOARD.cells[ANIMATION.to.x][ANIMATION.to.y] = BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
                     BOARD.cells[ANIMATION.to.x][ANIMATION.to.y].aabb = get_cell_aabb(ANIMATION.to, data_from.level)
-                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y] = Cell{}
+                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y] = Cell{ type = .Empty }
                     ANIMATION.active = false
                     ANIMATION.start = 0
                     ANIMATION.from = -1
                     ANIMATION.to = -1
                 }
             }
-            case .Attack: {}
+            case .Attack: {
+                assert(valid(ANIMATION.from))
+                cell_from := &BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
+                assert(cell_from.type == .Elemental)
+                data_from := cell_from.data
+                aabb_from := get_cell_aabb(ANIMATION.from, data_from.level)
+
+                assert(valid(ANIMATION.to))
+                cell_to := &BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
+                assert(cell_from.type == .Elemental)
+                data_to := cell_to.data
+                aabb_to := get_cell_aabb(ANIMATION.to, data_from.level)
+
+                t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
+                if t >= 0 && t < 0.5 {
+                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y].aabb.pos = math.lerp(aabb_from.pos, aabb_to.pos, ease.cubic_in_out(t*2))
+                } else if t >= 0.5 && t < 1 {
+                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y].aabb.pos = math.lerp(aabb_to.pos, aabb_from.pos, ease.cubic_in_out((t-0.5)*2))
+                } else {
+                    cell_to.data.health = math.clamp(data_to.health - DAMAGE_LEVEL[data_from.level], 0, HEALTH_LEVEL[data_to.level])
+                    if cell_to.data.health == 0 {
+                        cell_to.data.level -= 1
+                        if cell_to.data.level == 0 {
+                            BOARD.cells[ANIMATION.to.x][ANIMATION.to.y] = Cell{}
+                        } else {
+                            cell_to.data.health = HEALTH_LEVEL[cell_to.data.level]
+                            cell_to.aabb.size = get_cell_size(cell_to.data.level)
+                        }
+                    }
+                    SELECTED_CELL = {-1,-1}
+                    ANIMATION.active = false
+                    ANIMATION.start = 0
+                    ANIMATION.from = -1
+                    ANIMATION.to = -1
+                }
+            }
             case .Spell: {}
             }
         }
@@ -239,15 +271,23 @@ main :: proc() {
 
         if !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
             if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
-                if _, ok1 := BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data.(Empty); ok1 {
-                    if _, ok2 := BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].data.(Elemental); ok2 {
-                        // BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y] = BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y]
-                        ANIMATION.active = true
-                        ANIMATION.start = get_time()
-                        ANIMATION.duration = 1000
-                        ANIMATION.from = SELECTED_CELL
-                        ANIMATION.to = HOVERING_CELL
-                    }
+                if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Empty &&
+                   BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
+                    ANIMATION.active = true
+                    ANIMATION.type = .Move
+                    ANIMATION.start = get_time()
+                    ANIMATION.duration = 500
+                    ANIMATION.from = SELECTED_CELL
+                    ANIMATION.to = HOVERING_CELL
+                }
+                if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental &&
+                   BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
+                    ANIMATION.active = true
+                    ANIMATION.type = .Attack
+                    ANIMATION.start = get_time()
+                    ANIMATION.duration = 300
+                    ANIMATION.from = SELECTED_CELL
+                    ANIMATION.to = HOVERING_CELL
                 }
             }
 
@@ -263,8 +303,22 @@ main :: proc() {
 
         // {{{ DEBUG INFO
         debug_info : [2]string
-        if valid(SELECTED_CELL) { debug_info[0] = fmt.tprintf("Selected: %v %v", SELECTED_CELL, BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].data) }
-        if valid(HOVERING_CELL) { debug_info[1] = fmt.tprintf("Hovering: %v %v", HOVERING_CELL, BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data) }
+        if valid(SELECTED_CELL) {
+            debug_info[0] = fmt.tprintf("Selected: %v", SELECTED_CELL)
+            if BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
+                debug_info[0] = fmt.tprintf("%v %v", debug_info[0], BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].data)
+            } else {
+                debug_info[0] = fmt.tprintf("%v %v", debug_info[0], BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type)
+            }
+        }
+        if valid(HOVERING_CELL) {
+            debug_info[1] = fmt.tprintf("Selected: %v", HOVERING_CELL)
+            if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
+                debug_info[1] = fmt.tprintf("%v %v", debug_info[1], BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data)
+            } else {
+                debug_info[1] = fmt.tprintf("%v %v", debug_info[1], BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type)
+            }
+        }
         // }}}
 
         // {{{ Draw Calls
@@ -319,6 +373,7 @@ new_board :: proc() -> (board: Board) {
                 level := rand.choice(levels[:])
                 health := 1 + int(rand.int31()) % HEALTH_LEVEL[level]
                 board.cells[i][j].data = Elemental{ type, level, health }
+                board.cells[i][j].type = .Elemental
                 board.cells[i][j].aabb = get_cell_aabb(i, j, level)
             }
             // case r < 0.5: { board.cells[i][j].data = Block{} }
@@ -342,12 +397,10 @@ draw_board :: proc(board: ^Board) {
 
     for i in 0..<12 {
         for j in 0..<12 {
-            switch data in board.cells[i][j].data {
-            case Empty: continue
-            case Block: panic("\n\tTODO: implement Block rendering")
-            case Elemental: {
-                draw_elemental(board.cells[i][j].aabb, data)
-            }
+            switch board.cells[i][j].type {
+            case .Empty: continue
+            case .Block: panic("\n\tTODO: implement Block rendering")
+            case .Elemental: draw_elemental(board.cells[i][j].aabb, board.cells[i][j].data)
             }
         }
     }
@@ -369,32 +422,13 @@ merge_board :: proc(board: ^Board) {
     // }}}
 }
 
-get_cell_aabb :: proc { get_cell_aabb_ij, get_cell_aabb_2int }
-get_cell_aabb_ij :: proc(i, j, level: int) -> Box {
-    cell_pos := get_cell_pos(i, j, level)
-    cell_size := get_cell_size(level)
-    return { cell_pos, cell_size }
-}
-get_cell_aabb_2int :: proc(pos: [2]int, level: int) -> Box {
-    cell_pos := get_cell_pos(pos.x, pos.y, level)
-    cell_size := get_cell_size(level)
-    return { cell_pos, cell_size }
-}
-
-get_tile_aabb :: proc(i, j: int) -> Box {
-    tile_height :: 0.01
-    tile_pos := Vec3{f32(i), -tile_height/2, f32(j)} + {-5.5, 0, -5.5}
-    tile_size := Vec3{1, tile_height, 1}
-    return { tile_pos, tile_size }
-}
-
 draw_elemental :: proc(aabb: Box, data: Elemental) {
     // {{{
     BUMP : f32 : 0.05
     draw_cube(aabb, ElementColor[data.type][1])
     draw_cube_wires(aabb, ElementColor[data.type][0])
 
-    draw_health(aabb, data, 2)
+    draw_health(aabb, data)
 
     for i in 0..<data.level {
         for j in 0..<data.level {
@@ -415,6 +449,7 @@ draw_elemental :: proc(aabb: Box, data: Elemental) {
 }
 
 draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := true) {
+    // {{{
     assert(data.level >= 1 && data.level <= 3)
     hp_max := HEALTH_LEVEL[data.level]
     hp_width := get_cell_size(3).x * 0.75 / 6
@@ -423,7 +458,7 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
     for i in 0..<hp_max {
         hp : Box
         hp.size = { hp_width, hp_width, hp_depth }
-        hp.pos.x = aabb.pos.x - aabb.size.x/2 + hp_gap + hp_width/2 + f32(i)*(hp_gap + hp_width)
+        hp.pos.x = aabb.pos.x + (-aabb.size.x/2 + hp_gap + hp_width/2 + f32(i)*(hp_gap + hp_width)) * (_reverse ? -1 : 1)
         hp.pos.y = aabb.pos.y
         hp.pos.z = aabb.pos.z + aabb.size.z/2 * (_reverse ? -1 : 1)
 
@@ -435,6 +470,7 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
     }
 
     if _reverse { draw_health(aabb, data, damage, false) }
+    // }}}
 }
 
 draw_cube :: proc { draw_cube_Vec3, draw_cube_Box }
@@ -443,6 +479,25 @@ draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeV(pos, size, 
 draw_cube_wires_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeWiresV(pos, size, color) }
 draw_cube_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeV(aabb.pos, aabb.size, color) }
 draw_cube_wires_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeWiresV(aabb.pos, aabb.size, color) }
+
+get_cell_aabb :: proc { get_cell_aabb_ij, get_cell_aabb_2int }
+get_cell_aabb_ij :: proc(i, j, level: int) -> Box {
+    cell_pos := get_cell_pos(i, j, level)
+    cell_size := get_cell_size(level)
+    return { cell_pos, cell_size }
+}
+get_cell_aabb_2int :: proc(pos: [2]int, level: int) -> Box {
+    cell_pos := get_cell_pos(pos.x, pos.y, level)
+    cell_size := get_cell_size(level)
+    return { cell_pos, cell_size }
+}
+
+get_tile_aabb :: proc(i, j: int) -> Box {
+    tile_height :: 0.01
+    tile_pos := Vec3{f32(i), -tile_height/2, f32(j)} + {-5.5, 0, -5.5}
+    tile_size := Vec3{1, tile_height, 1}
+    return { tile_pos, tile_size }
+}
 
 raytrace :: proc(min_bound, max_bound: Vec3) -> rl.RayCollision {
     return rl.GetRayCollisionBox(rl.GetScreenToWorldRay(rl.GetMousePosition(), CAMERA), {min_bound, max_bound})
