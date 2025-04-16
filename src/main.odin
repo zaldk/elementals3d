@@ -3,6 +3,7 @@ package elementals
 import "core:fmt"
 import "core:strings"
 import "core:math"
+import "core:math/ease"
 import "core:math/rand"
 import "core:mem"
 import "base:intrinsics"
@@ -14,20 +15,16 @@ Color :: rl.Color
 TW :: tw.TW
 
 BLACK :: Color{0,0,0,255}
+WHITE :: Color{255,255,255,255}
 
 ENABLED_SHADERS :: #config(SHADERS, false)
 TARGET_FPS :: 240
 EPSILON :: 0.001
-CELL_SIZE :: proc(level := 1) -> Vec3 { return {1, 0.75, 1} * 0.5 * math.pow(f32(level), 0.2) }
-CELL_POS :: proc(i,j: int, level := 1) -> Vec3 {
-    return {
-        f32(i-6)+0.5,
-        CELL_SIZE(level).y / 2,
-        f32(j-6)+0.5,
-    }
-}
 HEALTH_LEVEL := [?]int{ -1, 1, 2, 6 }
 DAMAGE_LEVEL := [?]int{ -1, 1, 2, 4 }
+REACH_LEVEL  := [?]int{ -1, 3, 5, 7 }
+SPELL_DAMAGE := [Spell]int{ .FS = 2, .HV = -1, .AF = 1, .DT = -1, .MS = 4 }
+SPELL_CHARGE := [Spell]int{ .FS = 4, .HV = 5, .AF = 7, .DT = 9, .MS = 10 }
 
 CAMERA : rl.Camera3D
 CAM_HEIGHT := 9 * math.sqrt(f32(8) / f32(7))
@@ -35,6 +32,8 @@ CAM_HEIGHT := 9 * math.sqrt(f32(8) / f32(7))
 COLLISION := rl.RayCollision{ distance = math.F32_MAX }
 SELECTED_CELL := [2]int{-1, -1}
 HOVERING_CELL := [2]int{-1, -1}
+
+Spell :: enum { FS, HV, AF, DT, MS }
 
 Box :: struct {
     pos: Vec3,
@@ -65,6 +64,7 @@ CellData :: union #no_nil {
 }
 
 Cell :: struct {
+    aabb: Box,
     data: CellData,
 }
 
@@ -88,8 +88,16 @@ Action :: struct {
 AnimationType :: enum { Move, Attack, Spell }
 ANIMATION := struct {
     active: bool,
+    type: AnimationType,
+    duration: f32, // ms
+    start:    f32, // ms
+    from: [2]int, // grid positions
+    to:   [2]int, // grid positions
 }{
     active = false,
+    from = {-1,-1},
+    to   = {-1,-1},
+    duration = 1000,
 }
 
 main :: proc() {
@@ -135,14 +143,12 @@ main :: proc() {
         rl.SetShaderValue(shader, ambientLoc, raw_data(ambient_light[:]), rl.ShaderUniformDataType.VEC4);
     }
 
-    board := new_board()
+    BOARD := new_board()
     // }}}
 
     // {{{ The Game Loop
     for !rl.WindowShouldClose() {
-        // {{{ FRAME RESET
         rl.SetMouseCursor(.DEFAULT)
-        // }}}
 
         // {{{ Collision Calculation
         COLLISION = rl.RayCollision{ distance = math.F32_MAX }
@@ -152,7 +158,7 @@ main :: proc() {
                 tile_collision := raytrace(tile.pos - tile.size/2, tile.pos + tile.size/2)
 
                 cell_collision := tile_collision
-                if data, ok := board.cells[i][j].data.(Elemental); ok {
+                if data, ok := BOARD.cells[i][j].data.(Elemental); ok {
                     cell := get_cell_aabb(i, j, data.level)
                     cell_collision = raytrace(cell.pos - cell.size/2, cell.pos + cell.size/2)
                 }
@@ -178,27 +184,48 @@ main :: proc() {
         if COLLISION.hit {
             i, j := point2grid(COLLISION.point)
             HOVERING_CELL = {i,j}
-            if _, ok := board.cells[i][j].data.(Elemental); ok {
+            if _, ok := BOARD.cells[i][j].data.(Elemental); ok {
                 rl.SetMouseCursor(.POINTING_HAND)
             }
         }
 
-        // {{{ Input + Animations
-        // if CAM_SWITCH {
-        //     t := math.unlerp(CAM_TIME, CAM_TIME+CAM_DELTA, f32(rl.GetTime() * 1000))
-        //     if t >= 0 && t <= 1 {
-        //         angle := math.PI/4 + math.PI * math.smoothstep(f32(0),1,t)
-        //         if CAM_POS.x < 0 { angle += math.PI }
-        //         CAMERA.position.xz = { f32(math.cos(angle)), f32(math.sin(angle)) } * 6 * math.SQRT_TWO
-        //         CAMERA.position.y = CAM_HEIGHT
-        //     } else { CAM_SWITCH = false }
-        // }
-        // if !CAM_SWITCH && rl.IsMouseButtonPressed(.MIDDLE) {
-        //     CAM_SWITCH = true
-        //     CAM_TIME = f32(rl.GetTime() * 1000)
-        //     CAM_POS = CAMERA.position
-        // }
+        // {{{ Animations
+        if ANIMATION.active {
+            switch ANIMATION.type {
+            case .Move: {
+                assert(valid(ANIMATION.from))
+                cell_from := BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
+                data_from, ok_from := cell_from.data.(Elemental)
+                assert(ok_from, "FROM cell was not an Elemental")
+                aabb_from := get_cell_aabb(ANIMATION.from, data_from.level)
 
+                assert(valid(ANIMATION.to))
+                cell_to := BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
+                _, ok_to := cell_to.data.(Empty)
+                assert(ok_to, "TO cell was not an Empty")
+                aabb_to := get_cell_aabb(ANIMATION.to, data_from.level)
+
+                t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
+                t = ease.cubic_in_out(t)
+                if t >= 0 && t <= 1 {
+                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y].aabb.pos = math.lerp(aabb_from.pos, aabb_to.pos, t)
+                } else {
+                    BOARD.cells[ANIMATION.to.x][ANIMATION.to.y] = BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
+                    BOARD.cells[ANIMATION.to.x][ANIMATION.to.y].aabb = get_cell_aabb(ANIMATION.to, data_from.level)
+                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y] = Cell{}
+                    ANIMATION.active = false
+                    ANIMATION.start = 0
+                    ANIMATION.from = -1
+                    ANIMATION.to = -1
+                }
+            }
+            case .Attack: {}
+            case .Spell: {}
+            }
+        }
+        // }}}
+
+        // {{{ Input
         if !rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y < 0 { CAMERA.fovy *= 1.1 }
         if !rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y > 0 { CAMERA.fovy *= 0.9 }
         if  rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y < 0 { rotate_camera(-1) }
@@ -206,35 +233,38 @@ main :: proc() {
         if rl.GetMouseWheelMoveV().x < 0 { rotate_camera(-1) }
         if rl.GetMouseWheelMoveV().x > 0 { rotate_camera(+1) }
 
-        when ENABLED_SHADERS { rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), rl.ShaderUniformDataType.VEC3); }
+        when ENABLED_SHADERS { rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), rl.ShaderUniformDataType.VEC3) }
 
-        if !ANIMATION.active && rl.GetKeyPressed() == .Q { board = new_board() }
+        if !ANIMATION.active && rl.GetKeyPressed() == .Q { BOARD = new_board() }
 
         if !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
-            null_selected := false
             if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
-                if _, ok1 := board.cells[HOVERING_CELL.x][HOVERING_CELL.y].data.(Empty); ok1 {
-                    if _, ok2 := board.cells[SELECTED_CELL.x][SELECTED_CELL.y].data.(Elemental); ok2 {
-                        board.cells[HOVERING_CELL.x][HOVERING_CELL.y] = board.cells[SELECTED_CELL.x][SELECTED_CELL.y]
-                        null_selected = true
+                if _, ok1 := BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data.(Empty); ok1 {
+                    if _, ok2 := BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].data.(Elemental); ok2 {
+                        // BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y] = BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y]
+                        ANIMATION.active = true
+                        ANIMATION.start = get_time()
+                        ANIMATION.duration = 1000
+                        ANIMATION.from = SELECTED_CELL
+                        ANIMATION.to = HOVERING_CELL
                     }
                 }
             }
 
-            if null_selected {
-                board.cells[SELECTED_CELL.x][SELECTED_CELL.y] = Cell{}
-            } else if equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
-                SELECTED_CELL = {-1,-1}
-            } else {
-                SELECTED_CELL = HOVERING_CELL
+            if !ANIMATION.active {
+                if equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
+                    SELECTED_CELL = {-1,-1}
+                } else {
+                    SELECTED_CELL = HOVERING_CELL
+                }
             }
         }
         // }}}
 
         // {{{ DEBUG INFO
         debug_info : [2]string
-        if valid(SELECTED_CELL) { debug_info[0] = fmt.tprintf("Selected: %v %v", SELECTED_CELL, board.cells[SELECTED_CELL.x][SELECTED_CELL.y].data) }
-        if valid(HOVERING_CELL) { debug_info[1] = fmt.tprintf("Hovering: %v %v", HOVERING_CELL, board.cells[HOVERING_CELL.x][HOVERING_CELL.y].data) }
+        if valid(SELECTED_CELL) { debug_info[0] = fmt.tprintf("Selected: %v %v", SELECTED_CELL, BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].data) }
+        if valid(HOVERING_CELL) { debug_info[1] = fmt.tprintf("Hovering: %v %v", HOVERING_CELL, BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data) }
         // }}}
 
         // {{{ Draw Calls
@@ -245,7 +275,11 @@ main :: proc() {
             rl.BeginMode3D(CAMERA); {
                 when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
 
-                draw_board(&board)
+                draw_board(&BOARD)
+
+                rl.DrawLine3D({0,2,0}, {0,2,0} + {1,0,0}, {255, 0, 0, 255})
+                rl.DrawLine3D({0,2,0}, {0,2,0} + {0,1,0}, {0, 255, 0, 255})
+                rl.DrawLine3D({0,2,0}, {0,2,0} + {0,0,1}, {0, 0, 255, 255})
 
                 when ENABLED_SHADERS { rl.EndShaderMode(); }
             }; rl.EndMode3D()
@@ -270,10 +304,11 @@ new_board :: proc() -> (board: Board) {
             tile_color : Color = {0, 0, 0, 255}
             tile_blue := j >= 6
             tile_dark := (i+j) % 2 == 0
-            if  tile_blue &&  tile_dark { tile_color = TW(.INDIGO7) }
-            if  tile_blue && !tile_dark { tile_color = TW(.INDIGO6) }
-            if !tile_blue &&  tile_dark { tile_color = TW(.YELLOW6) }
-            if !tile_blue && !tile_dark { tile_color = TW(.YELLOW5) }
+            if  tile_blue &&  tile_dark { tile_color = TW(.BLUE5) } // TW(.INDIGO7) }
+            if  tile_blue && !tile_dark { tile_color = TW(.BLUE4) } // TW(.INDIGO6) }
+            if !tile_blue &&  tile_dark { tile_color = TW(.GREEN5) } // TW(.YELLOW6) }
+            if !tile_blue && !tile_dark { tile_color = TW(.GREEN4) } // TW(.YELLOW5) }
+            tile_color.rgb = tile_color.rgb/16 * 10
             board.tiles[i][j].color = tile_color
             board.tiles[i][j].player = PlayerType(j/6)
 
@@ -282,8 +317,9 @@ new_board :: proc() -> (board: Board) {
             case r < 0.25: {
                 type := rand.choice_enum(Element)
                 level := rand.choice(levels[:])
-                health := int(rand.int31()) % HEALTH_LEVEL[level]
+                health := 1 + int(rand.int31()) % HEALTH_LEVEL[level]
                 board.cells[i][j].data = Elemental{ type, level, health }
+                board.cells[i][j].aabb = get_cell_aabb(i, j, level)
             }
             // case r < 0.5: { board.cells[i][j].data = Block{} }
             }
@@ -300,7 +336,7 @@ draw_board :: proc(board: ^Board) {
         for j in 0..<12 {
             tile := board.tiles[i][j]
             tile_aabb := get_tile_aabb(i,j)
-            draw_cube(tile_aabb.pos, tile_aabb.size, tile.color)
+            draw_cube(tile_aabb, tile.color)
         }
     }
 
@@ -310,7 +346,7 @@ draw_board :: proc(board: ^Board) {
             case Empty: continue
             case Block: panic("\n\tTODO: implement Block rendering")
             case Elemental: {
-                draw_elemental(get_cell_aabb(i, j, data.level), data)
+                draw_elemental(board.cells[i][j].aabb, data)
             }
             }
         }
@@ -318,9 +354,30 @@ draw_board :: proc(board: ^Board) {
     // }}}
 }
 
-get_cell_aabb :: proc(i, j, level: int) -> Box {
-    cell_pos := CELL_POS(i, j, level)
-    cell_size := CELL_SIZE(level)
+merge_board :: proc(board: ^Board) {
+    // {{{
+    merge_configurations := [8][3][2]int{
+        {{-1, -1}, {+0, -1}, {+1, -1}},
+        {{-1, +0}, {+0, +0}, {+1, +0}},
+        {{-1, +1}, {+0, +1}, {+1, +1}},
+        {{-1, -1}, {-1, +0}, {-1, +1}},
+        {{+0, -1}, {+0, +0}, {+0, +1}},
+        {{+1, -1}, {+1, +0}, {+1, +1}},
+        {{-1, -1}, {+0, +0}, {+1, +1}},
+        {{+1, -1}, {+0, +0}, {-1, +1}},
+    }
+    // }}}
+}
+
+get_cell_aabb :: proc { get_cell_aabb_ij, get_cell_aabb_2int }
+get_cell_aabb_ij :: proc(i, j, level: int) -> Box {
+    cell_pos := get_cell_pos(i, j, level)
+    cell_size := get_cell_size(level)
+    return { cell_pos, cell_size }
+}
+get_cell_aabb_2int :: proc(pos: [2]int, level: int) -> Box {
+    cell_pos := get_cell_pos(pos.x, pos.y, level)
+    cell_size := get_cell_size(level)
     return { cell_pos, cell_size }
 }
 
@@ -334,29 +391,58 @@ get_tile_aabb :: proc(i, j: int) -> Box {
 draw_elemental :: proc(aabb: Box, data: Elemental) {
     // {{{
     BUMP : f32 : 0.05
-    draw_cube(aabb.pos, aabb.size, ElementColor[data.type][1])
-    draw_cube_wires(aabb.pos, aabb.size, ElementColor[data.type][0])
+    draw_cube(aabb, ElementColor[data.type][1])
+    draw_cube_wires(aabb, ElementColor[data.type][0])
+
+    draw_health(aabb, data, 2)
 
     for i in 0..<data.level {
         for j in 0..<data.level {
-            dot_pos, dot_size : Vec3
+            dot : Box
 
-            dot_pos.x = (aabb.pos.x - aabb.size.x/2) + aabb.size.x / f32(data.level) * (f32(j) + 0.5)
-            dot_pos.y = aabb.pos.y + aabb.size.y/2 + BUMP/2
-            dot_pos.z = (aabb.pos.z - aabb.size.z/2) + aabb.size.z / f32(data.level) * (f32(i) + 0.5)
+            dot.pos.x = (aabb.pos.x - aabb.size.x/2) + aabb.size.x / f32(data.level) * (f32(j) + 0.5)
+            dot.pos.y = aabb.pos.y + aabb.size.y/2 + BUMP/4
+            dot.pos.z = (aabb.pos.z - aabb.size.z/2) + aabb.size.z / f32(data.level) * (f32(i) + 0.5)
 
-            dot_size = aabb.size * 0.75 / f32(data.level)
-            dot_size.y = BUMP
+            dot.size = aabb.size * 0.75 / f32(data.level)
+            dot.size.y = BUMP
 
-            draw_cube(dot_pos, dot_size, ElementColor[data.type][0])
-            draw_cube_wires(dot_pos, dot_size, ElementColor[data.type][1])
+            draw_cube(dot, ElementColor[data.type][0])
+            draw_cube_wires(dot, ElementColor[data.type][1])
         }
     }
     // }}}
 }
 
-draw_cube :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeV(pos, size, color) }
-draw_cube_wires :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeWiresV(pos, size, color) }
+draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := true) {
+    assert(data.level >= 1 && data.level <= 3)
+    hp_max := HEALTH_LEVEL[data.level]
+    hp_width := get_cell_size(3).x * 0.75 / 6
+    hp_gap := (aabb.size.z - hp_width * f32(hp_max)) / (f32(hp_max) + 1)
+    hp_depth : f32 = 0.025
+    for i in 0..<hp_max {
+        hp : Box
+        hp.size = { hp_width, hp_width, hp_depth }
+        hp.pos.x = aabb.pos.x - aabb.size.x/2 + hp_gap + hp_width/2 + f32(i)*(hp_gap + hp_width)
+        hp.pos.y = aabb.pos.y
+        hp.pos.z = aabb.pos.z + aabb.size.z/2 * (_reverse ? -1 : 1)
+
+        empty := i >= data.health
+        damaged := i >= data.health-damage
+
+        draw_cube(hp, empty ? TW(.SLATE5) : damaged ? TW(.RED5) : TW(.GREEN5))
+        draw_cube_wires(hp, BLACK)
+    }
+
+    if _reverse { draw_health(aabb, data, damage, false) }
+}
+
+draw_cube :: proc { draw_cube_Vec3, draw_cube_Box }
+draw_cube_wires :: proc { draw_cube_wires_Vec3, draw_cube_wires_Box }
+draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeV(pos, size, color) }
+draw_cube_wires_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeWiresV(pos, size, color) }
+draw_cube_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeV(aabb.pos, aabb.size, color) }
+draw_cube_wires_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeWiresV(aabb.pos, aabb.size, color) }
 
 raytrace :: proc(min_bound, max_bound: Vec3) -> rl.RayCollision {
     return rl.GetRayCollisionBox(rl.GetScreenToWorldRay(rl.GetMousePosition(), CAMERA), {min_bound, max_bound})
@@ -415,4 +501,17 @@ rotate_camera :: proc(direction: int) {
     beta -= math.mod(beta, math.PI / 90)
     CAMERA.position.x = math.cos(beta) * radius
     CAMERA.position.z = math.sin(beta) * radius
+}
+
+get_time :: proc() -> f32 {
+    return f32(rl.GetTime()) * 1000
+}
+
+get_cell_size :: proc(level := 1) -> Vec3 { return {1, 0.75, 1} * 0.5 * math.pow(f32(level), 0.2) }
+get_cell_pos :: proc(i,j: int, level := 1) -> Vec3 {
+    return {
+        f32(i-6)+0.5,
+        get_cell_size(level).y / 2,
+        f32(j-6)+0.5,
+    }
 }
