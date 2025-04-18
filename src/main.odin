@@ -18,7 +18,7 @@ BLACK :: Color{0,0,0,255}
 WHITE :: Color{255,255,255,255}
 
 ENABLED_SHADERS :: #config(SHADERS, false)
-TARGET_FPS :: 240
+TARGET_FPS :: 120
 EPSILON :: 0.001
 HEALTH_LEVEL := [?]int{ -1, 1, 2, 6 }
 DAMAGE_LEVEL := [?]int{ -1, 1, 2, 4 }
@@ -137,7 +137,7 @@ main :: proc() {
 
         ambientLoc := rl.GetShaderLocation(shader, "ambient");
         ambient_light := [4]f32{ 0.1, 0.1, 0.1, 1.0 }
-        rl.SetShaderValue(shader, ambientLoc, raw_data(ambient_light[:]), rl.ShaderUniformDataType.VEC4);
+        rl.SetShaderValue(shader, ambientLoc, raw_data(ambient_light[:]), .VEC4);
     }
 
     BOARD := new_board()
@@ -145,8 +145,6 @@ main :: proc() {
 
     // {{{ The Game Loop
     for !rl.WindowShouldClose() {
-        rl.SetMouseCursor(.DEFAULT)
-
         // {{{ Collision Calculation
         COLLISION = rl.RayCollision{ distance = math.F32_MAX }
         for i in 0..<12 {
@@ -183,6 +181,8 @@ main :: proc() {
             HOVERING_CELL = {i,j}
             if BOARD.cells[i][j].type == .Elemental {
                 rl.SetMouseCursor(.POINTING_HAND)
+            } else {
+                rl.SetMouseCursor(.DEFAULT)
             }
         }
 
@@ -320,6 +320,17 @@ main :: proc() {
             }
         }
         // }}}
+
+        when ENABLED_SHADERS {{{
+            index := 0
+            for i in 0..<12 {
+                for j in 0..<12 {
+                    if BOARD.cells[i][j].type == .Empty { continue }
+                    shader_add_box(shader, BOARD.cells[i][j].aabb, index)
+                    index += 1
+                }
+            }
+        }}}
 
         // {{{ Draw Calls
         rl.BeginDrawing(); {
@@ -569,4 +580,19 @@ get_cell_pos :: proc(i,j: int, level := 1) -> Vec3 {
         get_cell_size(level).y / 2,
         f32(j-6)+0.5,
     }
+}
+
+shader_add_box :: proc(shader: rl.Shader, box: Box, index: int) {
+    assert(index*2 < 65536)
+
+    pos_loc_cstr  := strings.clone_to_cstring(fmt.tprintf("boxes[%v]", index*2 + 0))
+    size_loc_cstr := strings.clone_to_cstring(fmt.tprintf("boxes[%v]", index*2 + 1))
+    defer delete(pos_loc_cstr)
+    defer delete(size_loc_cstr)
+
+    pos_loc  := rl.GetShaderLocation(shader, pos_loc_cstr)
+    size_loc := rl.GetShaderLocation(shader, size_loc_cstr)
+
+    pos  := box.pos;  rl.SetShaderValue(shader, pos_loc,  raw_data(pos[:]),  .VEC3)
+    size := box.size; rl.SetShaderValue(shader, size_loc, raw_data(size[:]), .VEC3)
 }
