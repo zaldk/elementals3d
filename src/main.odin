@@ -33,6 +33,10 @@ COLLISION := rl.RayCollision{ distance = math.F32_MAX }
 SELECTED_CELL := [2]int{-1, -1}
 HOVERING_CELL := [2]int{-1, -1}
 
+MAX_BOXES :: 4096
+ALL_BOXES_INDEX := 0
+ALL_BOXES : [MAX_BOXES]Box
+
 Spell :: enum { FS, HV, AF, DT, MS }
 
 Box :: struct {
@@ -267,7 +271,7 @@ main :: proc() {
 
         when ENABLED_SHADERS { rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), rl.ShaderUniformDataType.VEC3) }
 
-        if !ANIMATION.active && rl.GetKeyPressed() == .Q { BOARD = new_board() }
+        if !ANIMATION.active && rl.IsKeyDown(.Q) { BOARD = new_board() }
 
         if !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
             if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
@@ -322,20 +326,16 @@ main :: proc() {
         // }}}
 
         when ENABLED_SHADERS {{{
-            index := 0
-            for i in 0..<12 {
-                for j in 0..<12 {
-                    if BOARD.cells[i][j].type == .Empty { continue }
-                    shader_add_box(shader, BOARD.cells[i][j].aabb, index)
-                    index += 1
-                }
+            for i in 0..<ALL_BOXES_INDEX {
+                shader_add_box(shader, ALL_BOXES[i], i)
             }
+            ALL_BOXES_INDEX = 0
+            ALL_BOXES := [MAX_BOXES]Box{}
         }}}
 
         // {{{ Draw Calls
         rl.BeginDrawing(); {
             rl.ClearBackground({0,0,0,255})
-            rl.DrawFPS(0,0)
 
             rl.BeginMode3D(CAMERA); {
                 when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
@@ -354,6 +354,8 @@ main :: proc() {
                 defer delete(cstr)
                 rl.DrawText(cstr, 20, 20 + 40*i32(i), 20, rl.RAYWHITE)
             }
+
+            rl.DrawFPS(0,0)
         }; rl.EndDrawing()
         // }}}
     }
@@ -486,9 +488,17 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
 
 draw_cube :: proc { draw_cube_Vec3, draw_cube_Box }
 draw_cube_wires :: proc { draw_cube_wires_Vec3, draw_cube_wires_Box }
-draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeV(pos, size, color) }
+draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color) {
+    ALL_BOXES[ALL_BOXES_INDEX] = Box{pos, size}
+    ALL_BOXES_INDEX += 1
+    rl.DrawCubeV(pos, size, color)
+}
 draw_cube_wires_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeWiresV(pos, size, color) }
-draw_cube_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeV(aabb.pos, aabb.size, color) }
+draw_cube_Box :: proc(aabb: Box, color: Color) {
+    ALL_BOXES[ALL_BOXES_INDEX] = aabb
+    ALL_BOXES_INDEX += 1
+    rl.DrawCubeV(aabb.pos, aabb.size, color)
+}
 draw_cube_wires_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeWiresV(aabb.pos, aabb.size, color) }
 
 get_cell_aabb :: proc { get_cell_aabb_ij, get_cell_aabb_2int }
@@ -583,7 +593,7 @@ get_cell_pos :: proc(i,j: int, level := 1) -> Vec3 {
 }
 
 shader_add_box :: proc(shader: rl.Shader, box: Box, index: int) {
-    assert(index*2 < 65536)
+    assert(index*2 < MAX_BOXES)
 
     pos_loc_cstr  := strings.clone_to_cstring(fmt.tprintf("boxes[%v]", index*2 + 0))
     size_loc_cstr := strings.clone_to_cstring(fmt.tprintf("boxes[%v]", index*2 + 1))
