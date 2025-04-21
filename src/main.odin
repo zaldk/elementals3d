@@ -33,9 +33,11 @@ COLLISION := rl.RayCollision{ distance = math.F32_MAX }
 SELECTED_CELL := [2]int{-1, -1}
 HOVERING_CELL := [2]int{-1, -1}
 
-MAX_BOXES :: 4096
+MAX_BOXES :: 1024
 ALL_BOXES_INDEX := 0
 ALL_BOXES : [MAX_BOXES]Box
+
+DRAW_BOARD := true
 
 Spell :: enum { FS, HV, AF, DT, MS }
 
@@ -138,10 +140,6 @@ main :: proc() {
         shader := rl.LoadShader("src/resources/vertex.glsl", "src/resources/fragment.glsl")
         defer rl.UnloadShader(shader)
         shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW] = rl.GetShaderLocation(shader, "viewPos");
-
-        ambientLoc := rl.GetShaderLocation(shader, "ambient");
-        ambient_light := [4]f32{ 0.1, 0.1, 0.1, 1.0 }
-        rl.SetShaderValue(shader, ambientLoc, raw_data(ambient_light[:]), .VEC4);
     }
 
     BOARD := new_board()
@@ -180,15 +178,6 @@ main :: proc() {
             }
         }
         // }}}
-        if COLLISION.hit {
-            i, j := point2grid(COLLISION.point)
-            HOVERING_CELL = {i,j}
-            if BOARD.cells[i][j].type == .Elemental {
-                rl.SetMouseCursor(.POINTING_HAND)
-            } else {
-                rl.SetMouseCursor(.DEFAULT)
-            }
-        }
 
         // {{{ Animations + Logic
         if ANIMATION.active {
@@ -269,9 +258,19 @@ main :: proc() {
         if rl.GetMouseWheelMoveV().x < 0 { rotate_camera(-1) }
         if rl.GetMouseWheelMoveV().x > 0 { rotate_camera(+1) }
 
-        when ENABLED_SHADERS { rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), rl.ShaderUniformDataType.VEC3) }
+        if COLLISION.hit {
+            i, j := point2grid(COLLISION.point)
+            HOVERING_CELL = {i,j}
+            if BOARD.cells[i][j].type == .Elemental {
+                rl.SetMouseCursor(.POINTING_HAND)
+            } else {
+                rl.SetMouseCursor(.DEFAULT)
+            }
+        }
 
-        if !ANIMATION.active && rl.IsKeyDown(.Q) { BOARD = new_board() }
+        key := rl.GetKeyPressed()
+        if !ANIMATION.active && key == .Q { BOARD = new_board() }
+        if !ANIMATION.active && key == .P { DRAW_BOARD = !DRAW_BOARD }
 
         if !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
             if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
@@ -316,7 +315,7 @@ main :: proc() {
             }
         }
         if valid(HOVERING_CELL) {
-            debug_info[1] = fmt.tprintf("Selected: %v", HOVERING_CELL)
+            debug_info[1] = fmt.tprintf("Hovering: %v", HOVERING_CELL)
             if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
                 debug_info[1] = fmt.tprintf("%v %v", debug_info[1], BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data)
             } else {
@@ -325,13 +324,22 @@ main :: proc() {
         }
         // }}}
 
-        when ENABLED_SHADERS {{{
+        // {{{ SHADERS are awesome
+        when ENABLED_SHADERS {
             for i in 0..<ALL_BOXES_INDEX {
                 shader_add_box(shader, ALL_BOXES[i], i)
             }
+            num_boxes := ALL_BOXES_INDEX * 2
+            rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "num_boxes"), &num_boxes, .INT)
             ALL_BOXES_INDEX = 0
             ALL_BOXES := [MAX_BOXES]Box{}
-        }}}
+
+            rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), .VEC3)
+            // rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "plane_height"), &PLANE_HEIGHT, .FLOAT)
+            time := f32(rl.GetTime())
+            rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "time"), &time, .FLOAT)
+        }
+        // }}}
 
         // {{{ Draw Calls
         rl.BeginDrawing(); {
@@ -339,14 +347,26 @@ main :: proc() {
 
             rl.BeginMode3D(CAMERA); {
                 when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
-
-                draw_board(&BOARD)
-
-                rl.DrawLine3D({0,2,0}, {0,2,0} + {1,0,0}, {255, 0, 0, 255})
-                rl.DrawLine3D({0,2,0}, {0,2,0} + {0,1,0}, {0, 255, 0, 255})
-                rl.DrawLine3D({0,2,0}, {0,2,0} + {0,0,1}, {0, 0, 255, 255})
-
+                // rl.DrawPlane({0, PLANE_HEIGHT, 0}, {100, 100}, BLACK)
+                rl.DrawCubeV( {-50,0,0}, {0.01,1,1}*100, {0,255,255,255} )
+                rl.DrawCubeV( {0,-50,0}, {1,0.01,1}*100, {255,0,255,255} )
+                rl.DrawCubeV( {0,0,-50}, {1,1,0.01}*100, {255,255,0,255} )
+                rl.DrawCubeV( {50,0,0}, {0.01,1,1}*100, {255,0,0,255} )
+                rl.DrawCubeV( {0,50,0}, {1,0.01,1}*100, {0,255,0,255} )
+                rl.DrawCubeV( {0,0,50}, {1,1,0.01}*100, {0,0,255,255} )
+                if DRAW_BOARD {
+                    draw_board(&BOARD)
+                }
                 when ENABLED_SHADERS { rl.EndShaderMode(); }
+
+                if DRAW_BOARD {
+                    draw_all_elemental_wires(&BOARD)
+                    draw_all_healths(&BOARD)
+                }
+
+                // rl.DrawLine3D({0,2,0}, {0,2,0} + {1,0,0}, {255, 0, 0, 255})
+                // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,1,0}, {0, 255, 0, 255})
+                // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,0,1}, {0, 0, 255, 255})
             }; rl.EndMode3D()
 
             for ostr, i in debug_info[:] {
@@ -360,6 +380,21 @@ main :: proc() {
         // }}}
     }
     // }}}
+    // }}}
+}
+
+merge_board :: proc(board: ^Board) {
+    // {{{
+    merge_configurations := [8][3][2]int{
+        {{-1, -1}, {+0, -1}, {+1, -1}},
+        {{-1, +0}, {+0, +0}, {+1, +0}},
+        {{-1, +1}, {+0, +1}, {+1, +1}},
+        {{-1, -1}, {-1, +0}, {-1, +1}},
+        {{+0, -1}, {+0, +0}, {+0, +1}},
+        {{+1, -1}, {+1, +0}, {+1, +1}},
+        {{-1, -1}, {+0, +0}, {+1, +1}},
+        {{+1, -1}, {+0, +0}, {-1, +1}},
+    }
     // }}}
 }
 
@@ -420,33 +455,16 @@ draw_board :: proc(board: ^Board) {
     // }}}
 }
 
-merge_board :: proc(board: ^Board) {
-    // {{{
-    merge_configurations := [8][3][2]int{
-        {{-1, -1}, {+0, -1}, {+1, -1}},
-        {{-1, +0}, {+0, +0}, {+1, +0}},
-        {{-1, +1}, {+0, +1}, {+1, +1}},
-        {{-1, -1}, {-1, +0}, {-1, +1}},
-        {{+0, -1}, {+0, +0}, {+0, +1}},
-        {{+1, -1}, {+1, +0}, {+1, +1}},
-        {{-1, -1}, {+0, +0}, {+1, +1}},
-        {{+1, -1}, {+0, +0}, {-1, +1}},
-    }
-    // }}}
-}
-
 draw_elemental :: proc(aabb: Box, data: Elemental) {
     // {{{
     BUMP : f32 : 0.05
-    draw_cube(aabb, ElementColor[data.type][1])
-    draw_cube_wires(aabb, ElementColor[data.type][0])
+    draw_cube(aabb, ElementColor[data.type][1], true)
 
-    draw_health(aabb, data)
+    // draw_health(aabb, data)
 
+    dot : Box
     for i in 0..<data.level {
         for j in 0..<data.level {
-            dot : Box
-
             dot.pos.x = (aabb.pos.x - aabb.size.x/2) + aabb.size.x / f32(data.level) * (f32(j) + 0.5)
             dot.pos.y = aabb.pos.y + aabb.size.y/2 + BUMP/4
             dot.pos.z = (aabb.pos.z - aabb.size.z/2) + aabb.size.z / f32(data.level) * (f32(i) + 0.5)
@@ -455,7 +473,51 @@ draw_elemental :: proc(aabb: Box, data: Elemental) {
             dot.size.y = BUMP
 
             draw_cube(dot, ElementColor[data.type][0])
+        }
+    }
+    // }}}
+}
+
+draw_elemental_wires :: proc(aabb: Box, data: Elemental) {
+    // {{{
+    BUMP : f32 : 0.05
+    draw_cube_wires(aabb, ElementColor[data.type][0])
+
+    // draw_health(aabb, data)
+
+    dot : Box
+    for i in 0..<data.level {
+        for j in 0..<data.level {
+            dot.pos.x = (aabb.pos.x - aabb.size.x/2) + aabb.size.x / f32(data.level) * (f32(j) + 0.5)
+            dot.pos.y = aabb.pos.y + aabb.size.y/2 + BUMP/4
+            dot.pos.z = (aabb.pos.z - aabb.size.z/2) + aabb.size.z / f32(data.level) * (f32(i) + 0.5)
+
+            dot.size = aabb.size * 0.75 / f32(data.level)
+            dot.size.y = BUMP
+
             draw_cube_wires(dot, ElementColor[data.type][1])
+        }
+    }
+    // }}}
+}
+
+draw_all_elemental_wires :: proc(board: ^Board) {
+    // {{{
+    for i in 0..<12 {
+        for j in 0..<12 {
+            if board.cells[i][j].type != .Elemental { continue }
+            draw_elemental_wires(board.cells[i][j].aabb, board.cells[i][j].data)
+        }
+    }
+    // }}}
+}
+
+draw_all_healths :: proc(board: ^Board) {
+    // {{{
+    for i in 0..<12 {
+        for j in 0..<12 {
+            if board.cells[i][j].type != .Elemental { continue }
+            draw_health(board.cells[i][j].aabb, board.cells[i][j].data)
         }
     }
     // }}}
@@ -478,7 +540,7 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
         empty := i >= data.health
         damaged := i >= data.health-damage
 
-        draw_cube(hp, empty ? TW(.SLATE5) : damaged ? TW(.RED5) : TW(.GREEN5))
+        draw_cube(hp, empty ? TW(.SLATE5) : damaged ? TW(.RED5) : TW(.YELLOW4))
         draw_cube_wires(hp, BLACK)
     }
 
@@ -488,15 +550,23 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
 
 draw_cube :: proc { draw_cube_Vec3, draw_cube_Box }
 draw_cube_wires :: proc { draw_cube_wires_Vec3, draw_cube_wires_Box }
-draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color) {
-    ALL_BOXES[ALL_BOXES_INDEX] = Box{pos, size}
-    ALL_BOXES_INDEX += 1
+draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color, send_to_shader: bool = false) {
+    when ENABLED_SHADERS {
+        if send_to_shader {
+            ALL_BOXES[ALL_BOXES_INDEX] = Box{pos, size}
+            ALL_BOXES_INDEX += 1
+        }
+    }
     rl.DrawCubeV(pos, size, color)
 }
 draw_cube_wires_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeWiresV(pos, size, color) }
-draw_cube_Box :: proc(aabb: Box, color: Color) {
-    ALL_BOXES[ALL_BOXES_INDEX] = aabb
-    ALL_BOXES_INDEX += 1
+draw_cube_Box :: proc(aabb: Box, color: Color, send_to_shader: bool = false) {
+    when ENABLED_SHADERS {
+        if send_to_shader {
+            ALL_BOXES[ALL_BOXES_INDEX] = aabb
+            ALL_BOXES_INDEX += 1
+        }
+    }
     rl.DrawCubeV(aabb.pos, aabb.size, color)
 }
 draw_cube_wires_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeWiresV(aabb.pos, aabb.size, color) }
@@ -569,6 +639,7 @@ valid :: proc(grid_pos: [2]int) -> bool {
 }
 
 rotate_camera :: proc(direction: int) {
+    // {{{
     radius : f32 = 6 * math.SQRT_TWO
     CAMERA.position.x /= radius
     CAMERA.position.z /= radius
@@ -577,6 +648,7 @@ rotate_camera :: proc(direction: int) {
     beta -= math.mod(beta, math.PI / 90)
     CAMERA.position.x = math.cos(beta) * radius
     CAMERA.position.z = math.sin(beta) * radius
+    // }}}
 }
 
 get_time :: proc() -> f32 {
@@ -593,7 +665,17 @@ get_cell_pos :: proc(i,j: int, level := 1) -> Vec3 {
 }
 
 shader_add_box :: proc(shader: rl.Shader, box: Box, index: int) {
-    assert(index*2 < MAX_BOXES)
+    // {{{
+    if index*2+1 >= MAX_BOXES { return }
+
+    if box.pos.x < -6 || box.pos.x > 6 ||
+       box.pos.y < -1 || box.pos.y > 1 ||
+       box.pos.z < -6 || box.pos.z > 6 ||
+       box.size.x < 0 || box.size.x > 2 ||
+       box.size.y < 0 || box.size.y > 2 ||
+       box.size.z < 0 || box.size.z > 2 {
+        fmt.println(box)
+    }
 
     pos_loc_cstr  := strings.clone_to_cstring(fmt.tprintf("boxes[%v]", index*2 + 0))
     size_loc_cstr := strings.clone_to_cstring(fmt.tprintf("boxes[%v]", index*2 + 1))
@@ -605,4 +687,5 @@ shader_add_box :: proc(shader: rl.Shader, box: Box, index: int) {
 
     pos  := box.pos;  rl.SetShaderValue(shader, pos_loc,  raw_data(pos[:]),  .VEC3)
     size := box.size; rl.SetShaderValue(shader, size_loc, raw_data(size[:]), .VEC3)
+    // }}}
 }

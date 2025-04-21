@@ -12,21 +12,21 @@ uniform mat4 matModel;
 uniform mat4 matNormal;
 
 // Output vertex attributes (to fragment shader)
-out vec3 fragPosition;
-out vec2 fragTexCoord;
-out vec4 fragColor;
-out vec3 fragNormal;
-
-// NOTE: Add your custom variables here
+out vec3 frag_pos;
+out vec2 frag_tex_coord;
+out vec4 frag_color;
+out vec3 frag_normal;
+out vec2 uv;
 
 void main()
 {
     // Send vertex attributes to fragment shader
-    fragPosition = vertexPosition;
-    fragTexCoord = vertexTexCoord;
-    fragColor = vertexColor;
-    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal, 1.0)));
+    frag_pos = vertexPosition;
+    frag_tex_coord = vertexTexCoord;
+    frag_color = vertexColor;
+    frag_normal = normalize(vec3(matNormal*vec4(vertexNormal, 1.0)));
 
     // Calculate final vertex position
+    uv = vec2(mvp*vec4(vertexPosition, 1.0));
     gl_Position = mvp*vec4(vertexPosition, 1.0);
 }

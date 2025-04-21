@@ -1,69 +1,160 @@
 #version 330
 
 // Input vertex attributes (from vertex shader)
-in vec3 fragPosition;
-in vec2 fragTexCoord;
-in vec4 fragColor;
-in vec3 fragNormal;
+in vec3 frag_pos;
+in vec2 frag_tex_coord;
+in vec4 frag_color;
+in vec3 frag_normal;
+in vec2 uv;
 
 // Input uniform values
 uniform sampler2D texture0;
-uniform vec4 colDiffuse;
 
 // Output fragment color
-out vec4 finalColor;
+out vec4 final_color;
 
-#define LIGHT_DIRECTIONAL 1
-#define LIGHT_POINT       0
-#define MAX_BOXES         4096
+#define MAX_BOXES 1024
+#define EPSILON   0.0000001
 
-struct Light {
-    int type;
-    vec3 position;
-    vec3 target;
-    vec4 color;
-};
-
+uniform float time;
 uniform vec3[MAX_BOXES] boxes;
-uniform vec4 ambient;
+uniform int num_boxes;
 uniform vec3 viewPos;
 
-vec2 boxIntersection( in vec3 ro, in vec3 rd, vec3 boxSize, out vec3 outNormal ) {
-    vec3 m = 1.0/rd; // can precompute if traversing a set of aligned boxes
-    vec3 n = m*ro;   // can precompute if traversing a set of aligned boxes
-    vec3 k = abs(m)*boxSize;
-    vec3 t1 = -n - k;
-    vec3 t2 = -n + k;
-    float tN = max( max( t1.x, t1.y ), t1.z );
-    float tF = min( min( t2.x, t2.y ), t2.z );
-    if( tN>tF || tF<0.0) return vec2(-1.0); // no intersection
-    outNormal = (tN>0.0) ? step(vec3(tN),t1) : // ro ouside the box
-                           step(t2,vec3(tF));  // ro inside the box
-    outNormal *= -sign(rd);
-    return vec2( tN, tF );
+bool intersectRayAABB(vec3 rayOrig, vec3 rayDir, vec3 boxMin, vec3 boxMax, out float tNear, out float tFar) {
+    // Avoid division‑by‑zero by pushing zero components a little
+    vec3 invDir = 1.0 / max(abs(rayDir), vec3(1e-20)) * sign(rayDir);
+
+    vec3 t0 = (boxMin - rayOrig) * invDir;
+    vec3 t1 = (boxMax - rayOrig) * invDir;
+
+    vec3 tMin = min(t0, t1);
+    vec3 tMax = max(t0, t1);
+
+    tNear = max(max(tMin.x, tMin.y), tMin.z);
+    tFar  = min(min(tMax.x, tMax.y), tMax.z);
+
+    // Hit if intervals overlap and the box is in front of us
+    return tFar >= max(tNear, 0.0);
+}
+
+bool equal( in vec2 a, in vec2 b ) {
+    return abs(a.x - b.x) <= EPSILON &&
+    abs(a.y - b.y) <= EPSILON;
+}
+bool equal( in vec3 a, in vec3 b ) {
+    return abs(a.x - b.x) <= EPSILON &&
+    abs(a.y - b.y) <= EPSILON &&
+    abs(a.z - b.z) <= EPSILON;
+}
+
+float noise(vec3 p) {
+    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
+}
+
+float hash(vec3 p) {
+    p = 50.0*fract(p*0.3183099 + vec3(0.71,0.113,0.419));
+    return -1.0+2.0*fract(p.x*p.y*p.z*(p.x+p.y+p.z));
+}
+
+// return value noise (in x) and its derivatives (in yzw)
+vec4 noised(in vec3 x) {
+    vec3 i = floor(x);
+    vec3 w = fract(x);
+
+    vec3 u = w*w*w*(w*(w*6.0-15.0)+10.0);
+    vec3 du = 30.0*w*w*(w*(w-2.0)+1.0);
+
+    float a = hash(i+vec3(0,0,0));
+    float b = hash(i+vec3(1,0,0));
+    float c = hash(i+vec3(0,1,0));
+    float d = hash(i+vec3(1,1,0));
+    float e = hash(i+vec3(0,0,1));
+    float f = hash(i+vec3(1,0,1));
+    float g = hash(i+vec3(0,1,1));
+    float h = hash(i+vec3(1,1,1));
+
+    float k0 =   a;
+    float k1 =   b - a;
+    float k2 =   c - a;
+    float k3 =   e - a;
+    float k4 =   a - b - c + d;
+    float k5 =   a - c - e + g;
+    float k6 =   a - b - e + f;
+    float k7 = - a + b + c - d + e - f - g + h;
+
+    return vec4( k0 + k1*u.x + k2*u.y + k3*u.z + k4*u.x*u.y + k5*u.y*u.z + k6*u.z*u.x + k7*u.x*u.y*u.z,
+                du * vec3( k1 + k4*u.y + k6*u.z + k7*u.y*u.z,
+                          k2 + k5*u.z + k4*u.x + k7*u.z*u.x,
+                          k3 + k6*u.x + k5*u.y + k7*u.x*u.y ) );
+}
+
+vec4 fbmd(in vec3 x) {
+    const float scale  = 1.5;
+
+    float a = 0.0;
+    float b = 0.5;
+    float f = 1.0;
+    vec3  d = vec3(0.0);
+    for( int i=0; i<8; i++ )
+    {
+        vec4 n = noised(f*x*scale);
+        a += b*n.x;           // accumulate values
+        d += b*n.yzw*f*scale; // accumulate derivatives
+        b *= 0.5;             // amplitude decrease
+        f *= 2.0;             // frequency increase
+    }
+
+    return vec4( a, d );
+}
+
+vec4 fbm_warp(in vec3 p) {
+    return fbmd(p + fbmd(p + time / 100.0 + fbmd(p).x).x);
 }
 
 void main() {
-    vec4 texelColor = texture(texture0, fragTexCoord);
-    // vec3 lightDot = vec3(0);
-    // vec3 normal = normalize(fragNormal);
-    vec3 viewD = normalize(viewPos - fragPosition);
+    vec4 texelColor = texture(texture0, frag_tex_coord);
+    vec3 viewD = normalize(viewPos - frag_pos);
 
-    // finalColor = vec4(fragPosition.rgb, 1.0);
+    vec3 SUN = vec3(1, 2, -2) * 100;
+    vec3 color = frag_color.rgb;
 
-    finalColor = fragColor;
-    vec4 shadow_color = fragColor * 0.5;
+    if (length(frag_pos) < 20) {
+        vec3 ro = frag_pos + frag_normal * EPSILON;
+        vec3 rd = normalize(SUN);
+        for (int i = 0; i < num_boxes; i += 2) {
+            vec3 normal = vec3(0);
+            vec3 pos = boxes[i + 0];
+            vec3 size = boxes[i + 1];
 
-    vec3 SUN = vec3(1, 2, -1) * 100;
-
-    vec3 ro = fragPosition;
-    vec3 rd = -normalize(0 - SUN);
-    vec3 normal = vec3(0);
-    for (int i = 0; i < MAX_BOXES; i += 2) {
-        vec3 pos  = boxes[i + 0];
-        if (pos.x == 0.0 && pos.y == 0.0 && pos.z == 0.0) break;
-        vec3 size = boxes[i + 1]/2;
-        vec2 result = boxIntersection(ro - pos, rd, size, normal);
-        if (result.x != -1.0 && result.y != -1.0) { finalColor = shadow_color; }
+            float tN, tF;
+            if (intersectRayAABB( ro, rd, pos - size/2, pos + size/2, tN, tF)) {
+                color.rgb *= sqrt(tN / tF);
+                break;
+            }
+        }
+        color.rgb = clamp(color.rgb, frag_color.rgb * 0.25, frag_color.rgb * 2.0);
+    } else {
+        const float f1 = 0.1;
+        const float f2 = 0.01;
+        vec4 n = fbm_warp(vec3(uv * 10.0, 0) * f1);
+        // n.x -= mod(n.x, 0.1);
+        vec3 c1 = vec3(255,  93,   0) / 255.0 * 0.5;
+        vec3 c2 = vec3(255, 249, 154) / 255.0 * 0.5;
+        vec3 c3 = vec3(  0, 101, 255) / 255.0 * 0.5;
+        /*
+-1 .. -0.5 .. 0 .. 0.5 .. 1
+-1 .. -0.5 .. -0.33 .. 0 .. 0.33 .. 0.5 .. 1
+<------c1----->
+              <-------c2------->
+                                <-----c3---->
+        */
+        color = (
+            max(n.x, 0.0) * c1 +
+            min(abs(n.x), 0.5) * c2 +
+            max(-n.x, 0.0) * c3
+        );// * pow(length(n.yzw), 0.5);
     }
+
+    final_color = vec4(color, 1.0);
 }
