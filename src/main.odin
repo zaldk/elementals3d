@@ -306,7 +306,7 @@ main :: proc() {
 
         // {{{ DEBUG INFO
         debug_info : [2]string
-        if valid(SELECTED_CELL) {
+        if DRAW_BOARD && valid(SELECTED_CELL) {
             debug_info[0] = fmt.tprintf("Selected: %v", SELECTED_CELL)
             if BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
                 debug_info[0] = fmt.tprintf("%v %v", debug_info[0], BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].data)
@@ -314,7 +314,7 @@ main :: proc() {
                 debug_info[0] = fmt.tprintf("%v %v", debug_info[0], BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type)
             }
         }
-        if valid(HOVERING_CELL) {
+        if DRAW_BOARD && valid(HOVERING_CELL) {
             debug_info[1] = fmt.tprintf("Hovering: %v", HOVERING_CELL)
             if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
                 debug_info[1] = fmt.tprintf("%v %v", debug_info[1], BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data)
@@ -348,12 +348,12 @@ main :: proc() {
             rl.BeginMode3D(CAMERA); {
                 when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
                 // rl.DrawPlane({0, PLANE_HEIGHT, 0}, {100, 100}, BLACK)
-                rl.DrawCubeV( {-50,0,0}, {0.01,1,1}*100, {0,255,255,255} )
-                rl.DrawCubeV( {0,-50,0}, {1,0.01,1}*100, {255,0,255,255} )
-                rl.DrawCubeV( {0,0,-50}, {1,1,0.01}*100, {255,255,0,255} )
-                rl.DrawCubeV( {50,0,0}, {0.01,1,1}*100, {255,0,0,255} )
-                rl.DrawCubeV( {0,50,0}, {1,0.01,1}*100, {0,255,0,255} )
-                rl.DrawCubeV( {0,0,50}, {1,1,0.01}*100, {0,0,255,255} )
+                rl.DrawCubeV( {-50,0,0}, {0.01,1,1}*100, BLACK) //{0,255,255,255} )
+                rl.DrawCubeV( {0,-50,0}, {1,0.01,1}*100, BLACK) //{255,0,255,255} )
+                rl.DrawCubeV( {0,0,-50}, {1,1,0.01}*100, BLACK) //{255,255,0,255} )
+                rl.DrawCubeV( {50,0,0},  {0.01,1,1}*100, BLACK) //{255,0,0,255} )
+                rl.DrawCubeV( {0,50,0},  {1,0.01,1}*100, BLACK) //{0,255,0,255} )
+                rl.DrawCubeV( {0,0,50},  {1,1,0.01}*100, BLACK) //{0,0,255,255} )
                 if DRAW_BOARD {
                     draw_board(&BOARD)
                 }
@@ -398,20 +398,26 @@ merge_board :: proc(board: ^Board) {
     // }}}
 }
 
+get_tile_color :: proc(i, j: int) -> Color {
+    // {{{
+    tile_color : Color = {0, 0, 0, 255}
+    tile_blue := j >= 6
+    tile_dark := (i+j) % 2 == 0
+    if  tile_blue &&  tile_dark { tile_color = TW(.BLUE5)  } // TW(.INDIGO7) }
+    if  tile_blue && !tile_dark { tile_color = TW(.BLUE4)  } // TW(.INDIGO6) }
+    if !tile_blue &&  tile_dark { tile_color = TW(.GREEN5) } // TW(.YELLOW6) }
+    if !tile_blue && !tile_dark { tile_color = TW(.GREEN4) } // TW(.YELLOW5) }
+    tile_color.rgb = tile_color.rgb/16 * 10
+    return tile_color
+    // }}}
+}
+
 new_board :: proc() -> (board: Board) {
     // {{{
     levels := [?]int{1, 2, 3}
     for i in 0..<12 {
         for j in 0..<12 {
-            tile_color : Color = {0, 0, 0, 255}
-            tile_blue := j >= 6
-            tile_dark := (i+j) % 2 == 0
-            if  tile_blue &&  tile_dark { tile_color = TW(.BLUE5) } // TW(.INDIGO7) }
-            if  tile_blue && !tile_dark { tile_color = TW(.BLUE4) } // TW(.INDIGO6) }
-            if !tile_blue &&  tile_dark { tile_color = TW(.GREEN5) } // TW(.YELLOW6) }
-            if !tile_blue && !tile_dark { tile_color = TW(.GREEN4) } // TW(.YELLOW5) }
-            tile_color.rgb = tile_color.rgb/16 * 10
-            board.tiles[i][j].color = tile_color
+            board.tiles[i][j].color = get_tile_color(i,j)
             board.tiles[i][j].player = PlayerType(j/6)
 
             r := rand.float32()
@@ -440,8 +446,12 @@ draw_board :: proc(board: ^Board) {
             tile := board.tiles[i][j]
             tile_aabb := get_tile_aabb(i,j)
             draw_cube(tile_aabb, tile.color)
+            tile_aabb_wires := Box{ tile_aabb.pos, tile_aabb.size * {0.99, 1, 0.99} }
+            draw_cube_wires(tile_aabb_wires, get_tile_color((i+1)%12,j))
         }
     }
+    // tile_height := get_tile_aabb(0,0).size.y
+    // draw_cube_wires(Vec3{0,-tile_height/2,0}, Vec3{12, tile_height, 12}, BLACK)
 
     for i in 0..<12 {
         for j in 0..<12 {
@@ -584,9 +594,9 @@ get_cell_aabb_2int :: proc(pos: [2]int, level: int) -> Box {
 }
 
 get_tile_aabb :: proc(i, j: int) -> Box {
-    tile_height :: 0.01
-    tile_pos := Vec3{f32(i), -tile_height/2, f32(j)} + {-5.5, 0, -5.5}
+    tile_height :: 0.25
     tile_size := Vec3{1, tile_height, 1}
+    tile_pos := Vec3{f32(i) - 5.5, -tile_size.y/2, f32(j) - 5.5}
     return { tile_pos, tile_size }
 }
 

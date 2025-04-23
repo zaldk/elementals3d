@@ -135,25 +135,12 @@ void main() {
         }
         color.rgb = clamp(color.rgb, frag_color.rgb * 0.25, frag_color.rgb * 2.0);
     } else {
-        const float f1 = 0.1;
-        const float f2 = 0.01;
-        vec4 n = fbm_warp(vec3(uv * 10.0, 0) * f1);
+        vec2 p = uv * 10;
+        vec4 n = fbm_warp(vec3(p, 0) * 0.1);
         // n.x -= mod(n.x, 0.1);
-        vec3 c1 = vec3(255,  93,   0) / 255.0 * 0.5;
-        vec3 c2 = vec3(255, 249, 154) / 255.0 * 0.5;
-        vec3 c3 = vec3(  0, 101, 255) / 255.0 * 0.5;
-        /*
--1 .. -0.5 .. 0 .. 0.5 .. 1
--1 .. -0.5 .. -0.33 .. 0 .. 0.33 .. 0.5 .. 1
-<------c1----->
-              <-------c2------->
-                                <-----c3---->
-        */
-        color = (
-            max(n.x, 0.0) * c1 +
-            min(abs(n.x), 0.5) * c2 +
-            max(-n.x, 0.0) * c3
-        );// * pow(length(n.yzw), 0.5);
+        vec3 c1 = vec3(0.392, 0.454, 0.545); //vec3(0.341, 0.396, 0.478);
+        vec3 c2 = vec3(0.850, 0.466, 0.023); //vec3(0.956, 0.533, 0.023);
+        color = ( max(n.x, 0.0) * c1 + max(-n.x, 0.0) * c2);// * pow(length(n.yzw), 0.5);
     }
 
     final_color = vec4(color, 1.0);
