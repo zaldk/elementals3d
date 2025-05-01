@@ -111,7 +111,9 @@ vec4 fbmd(in vec3 x) {
 }
 
 vec4 fbm_warp(in vec3 p) {
-    return fbmd(p + time / 10.0 + fbmd(p + fbmd(p).x).x);
+    // return fbmd(p + time / 100.0);
+    // return fbmd(p + fbmd(p + time / 100.0).x);
+    return fbmd(p + fbmd(p + fbmd(p + time / 100.0).x).x);
 }
 
 void main() {
@@ -139,10 +141,11 @@ void main() {
         color.rgb = clamp(color.rgb, frag_color.rgb * 0.25, frag_color.rgb * 2.0);
     } else {
         vec2 p = uv * 10;
-        vec4 n = fbm_warp(vec3(p, 0) * 0.1);
+        vec4 n = fbm_warp(vec3(p + 1000.0, 0) * 0.1);
+        float r = n.x;// * clamp(length(n.yzw) - mod(length(n.yzw), 1.0), 0.1, 1.0);
         vec3 c1 = bg_color_1; //vec3(0.392, 0.454, 0.545); //vec3(0.341, 0.396, 0.478);
         vec3 c2 = bg_color_2; //vec3(0.850, 0.466, 0.023); //vec3(0.956, 0.533, 0.023);
-        color = ( max(n.x, 0.0) * c1 + max(-n.x, 0.0) * c2);// * pow(length(n.yzw), 0.5);
+        color = (max(r, 0.0) * c1 + max(-r, 0.0) * c2);// * pow(length(n.yzw), 0.5);
     }
 
     final_color = vec4(color, 1.0);

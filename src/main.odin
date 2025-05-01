@@ -42,6 +42,9 @@ DRAW_BOARD := true
 VERTEX_SHADER :: #load("resources/vertex.glsl", cstring)
 FRAGMENT_SHADER :: #load("resources/fragment.glsl", cstring)
 
+ViewTarget :: enum { Game, Menu, Conf }
+VIEW_TARGET : ViewTarget = .Menu
+
 Spell :: enum { FS, HV, AF, DT, MS }
 
 Box :: struct {
@@ -161,7 +164,8 @@ main :: proc() {
     // }}}
 
     // {{{ The Game Loop
-    for !rl.WindowShouldClose() {
+    quit := false
+    for !rl.WindowShouldClose() && !quit {
         // {{{ Collision Calculation
         COLLISION = rl.RayCollision{ distance = math.F32_MAX }
         for i in 0..<12 {
@@ -284,10 +288,11 @@ main :: proc() {
         }
 
         key := rl.GetKeyPressed()
-        if !ANIMATION.active && key == .Q { BOARD = new_board() }
-        if !ANIMATION.active && key == .W { DRAW_BOARD = !DRAW_BOARD }
-        when ENABLED_SHADERS {
-            if !ANIMATION.active && key == .E {
+        switch {
+        case key == .Q && !ANIMATION.active: { BOARD = new_board() }
+        case key == .W: { DRAW_BOARD = !DRAW_BOARD }
+        case key == .E: {
+            when ENABLED_SHADERS {
                 t1 := tw.TW_RANDOM()
                 c1 := [3]f32{ f32(t1.r) / 255.0, f32(t1.g) / 255.0, f32(t1.b) / 255.0 }
                 rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "bg_color_1"), raw_data(c1[:]), .VEC3)
@@ -296,6 +301,8 @@ main :: proc() {
                 c2 := [3]f32{ f32(t2.r) / 255.0, f32(t2.g) / 255.0, f32(t2.b) / 255.0 }
                 rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "bg_color_2"), raw_data(c2[:]), .VEC3)
             }
+        }
+        case key == .R: { VIEW_TARGET = .Menu }// ViewTarget((int(VIEW_TARGET)+1) % len(ViewTarget)) }
         }
 
         if !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
@@ -377,37 +384,94 @@ main :: proc() {
         rl.BeginDrawing(); {
             rl.ClearBackground({0,0,0,255})
 
-            rl.BeginMode3D(CAMERA); {
-                when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
-                // rl.DrawPlane({0, PLANE_HEIGHT, 0}, {100, 100}, BLACK)
-                rl.DrawCubeV( {-50,0,0}, {0.01,1,1}*100, BLACK) //{0,255,255,255} )
-                rl.DrawCubeV( {0,-50,0}, {1,0.01,1}*100, BLACK) //{255,0,255,255} )
-                rl.DrawCubeV( {0,0,-50}, {1,1,0.01}*100, BLACK) //{255,255,0,255} )
-                rl.DrawCubeV( {50,0,0},  {0.01,1,1}*100, BLACK) //{255,0,0,255} )
-                rl.DrawCubeV( {0,50,0},  {1,0.01,1}*100, BLACK) //{0,255,0,255} )
-                rl.DrawCubeV( {0,0,50},  {1,1,0.01}*100, BLACK) //{0,0,255,255} )
+            switch VIEW_TARGET {
+            case .Game: rl.BeginMode3D(CAMERA); {
+                    when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
+                    rl.DrawCubeV( {-50,0,0}, {0.01,1,1}*100, BLACK) //{0,255,255,255} )
+                    rl.DrawCubeV( {0,-50,0}, {1,0.01,1}*100, BLACK) //{255,0,255,255} )
+                    rl.DrawCubeV( {0,0,-50}, {1,1,0.01}*100, BLACK) //{255,255,0,255} )
+                    rl.DrawCubeV( {50,0,0},  {0.01,1,1}*100, BLACK) //{255,0,0,255} )
+                    rl.DrawCubeV( {0,50,0},  {1,0.01,1}*100, BLACK) //{0,255,0,255} )
+                    rl.DrawCubeV( {0,0,50},  {1,1,0.01}*100, BLACK) //{0,0,255,255} )
+                    if DRAW_BOARD { draw_board(&BOARD) }
+                    when ENABLED_SHADERS { rl.EndShaderMode(); }
 
-                if DRAW_BOARD { draw_board(&BOARD) }
+                    if DRAW_BOARD {
+                        draw_all_elemental_wires(&BOARD)
+                        draw_all_healths(&BOARD)
+                    }
 
-                when ENABLED_SHADERS { rl.EndShaderMode(); }
+                    // rl.DrawLine3D({0,2,0}, {0,2,0} + {1,0,0}, {255, 0, 0, 255})
+                    // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,1,0}, {0, 255, 0, 255})
+                    // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,0,1}, {0, 0, 255, 255})
+                }; rl.EndMode3D()
 
-                if DRAW_BOARD {
-                    draw_all_elemental_wires(&BOARD)
-                    draw_all_healths(&BOARD)
+                for ostr, i in debug_info[:] {
+                    cstr := strings.clone_to_cstring(ostr)
+                    defer delete(cstr)
+                    rl.DrawText(cstr, 20, 20 + 40*i32(i), 20, rl.RAYWHITE)
                 }
+            case .Menu: {
+                bg_color :: Color{ 0x20, 0x20, 0x20, 255}
+                rl.ClearBackground(bg_color)
+                w := f32(rl.GetScreenWidth())
+                h := f32(rl.GetScreenHeight())
 
-                // rl.DrawLine3D({0,2,0}, {0,2,0} + {1,0,0}, {255, 0, 0, 255})
-                // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,1,0}, {0, 255, 0, 255})
-                // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,0,1}, {0, 0, 255, 255})
-            }; rl.EndMode3D()
+                btn_size := [2]f32{500, 200}
 
-            for ostr, i in debug_info[:] {
-                cstr := strings.clone_to_cstring(ostr)
-                defer delete(cstr)
-                rl.DrawText(cstr, 20, 20 + 40*i32(i), 20, rl.RAYWHITE)
+                btn_pos_play := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 - btn_size.y * 1.25 }
+                btn_pos_conf := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 }
+                btn_pos_quit := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 + btn_size.y * 1.25 }
+
+                state_play, action_play := button({ btn_pos_play.x, btn_pos_play.y, btn_size.x, btn_size.y })
+                state_conf, action_conf := button({ btn_pos_conf.x, btn_pos_conf.y, btn_size.x, btn_size.y })
+                state_quit, action_quit := button({ btn_pos_quit.x, btn_pos_quit.y, btn_size.x, btn_size.y })
+
+                text_play :: "Play";      text_play_size := measure_text(text_play)
+                text_conf :: "Settings";  text_conf_size := measure_text(text_conf)
+                text_quit :: "Quit";      text_quit_size := measure_text(text_quit)
+
+                color_play_fg := [?]Color{ TW(.GREEN4), TW(.GREEN5), TW(.GREEN3) }
+                color_conf_fg := [?]Color{  TW(.BLUE4),  TW(.BLUE5),  TW(.BLUE3) }
+                color_quit_fg := [?]Color{   TW(.RED4),   TW(.RED5),   TW(.RED3) }
+
+                color_play_bg := [?]Color{   TW(.TEAL8),   TW(.TEAL9),   TW(.TEAL7) }
+                color_conf_bg := [?]Color{ TW(.INDIGO8), TW(.INDIGO9), TW(.INDIGO7) }
+                color_quit_bg := [?]Color{   TW(.ROSE8),   TW(.ROSE9),   TW(.ROSE7) }
+
+                rl.DrawRectangleV(btn_pos_play, btn_size, color_play_fg[state_play])
+                rl.DrawRectangleV(btn_pos_play + 10, btn_size - 20, color_play_bg[state_play])
+                rl.DrawText(text_play,
+                    i32(btn_pos_play.x + btn_size.x/2 - text_play_size.x/2),
+                    i32(btn_pos_play.y + btn_size.y/2 - text_play_size.y/2),
+                64, color_play_fg[state_play])
+
+                rl.DrawRectangleV(btn_pos_conf, btn_size, color_conf_fg[state_conf])
+                rl.DrawRectangleV(btn_pos_conf + 10, btn_size - 20, color_conf_bg[state_conf])
+                rl.DrawText(text_conf,
+                    i32(btn_pos_conf.x + btn_size.x/2 - text_conf_size.x/2),
+                    i32(btn_pos_conf.y + btn_size.y/2 - text_conf_size.y/2),
+                64, color_conf_fg[state_conf])
+
+                rl.DrawRectangleV(btn_pos_quit, btn_size, color_quit_fg[state_quit])
+                rl.DrawRectangleV(btn_pos_quit + 10, btn_size - 20, color_quit_bg[state_quit])
+                rl.DrawText(text_quit,
+                    i32(btn_pos_quit.x + btn_size.x/2 - text_quit_size.x/2),
+                    i32(btn_pos_quit.y + btn_size.y/2 - text_quit_size.y/2),
+                64, color_quit_fg[state_quit])
+
+                switch {
+                case action_play: VIEW_TARGET = .Game
+                case action_conf: VIEW_TARGET = .Conf
+                case action_quit: quit = true
+                }
+            }
+            case .Conf: {
+                rl.DrawText("Here be dragons", 100, 100, 64, TW(.ROSE5))
+            }
             }
 
-            if DRAW_BOARD { rl.DrawFPS(0,0) }
+            rl.DrawFPS(0,0)
         }; rl.EndDrawing()
         // }}}
     }

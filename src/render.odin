@@ -288,3 +288,16 @@ rotate_camera :: proc(direction: int) {
 get_time :: proc() -> f32 {
     return f32(rl.GetTime()) * 1000
 }
+
+// ================================================================================
+
+_IS_HOVERING_OVER_BUTTONS := false
+// state: 0=normal 1=hover 2=press
+button :: proc(aabb: [4]f32) -> (state: int, action: bool) {
+    if rl.CheckCollisionPointRec(rl.GetMousePosition(), rl.Rectangle{ aabb.x, aabb.y, aabb.z, aabb.w }) {
+        _IS_HOVERING_OVER_BUTTONS = true
+        state = 1 + int(rl.IsMouseButtonDown(.LEFT))
+        action = rl.IsMouseButtonPressed(.LEFT)
+    } else { state = 0 }
+    return
+}
