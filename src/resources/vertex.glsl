@@ -11,6 +11,10 @@ uniform mat4 mvp;
 uniform mat4 matModel;
 uniform mat4 matNormal;
 
+uniform vec2 resolution;
+uniform vec2 window_position;
+uniform vec2 display_resolution;
+
 // Output vertex attributes (to fragment shader)
 out vec3 frag_pos;
 out vec2 frag_tex_coord;
@@ -26,7 +30,15 @@ void main()
     frag_color = vertexColor;
     frag_normal = normalize(vec3(matNormal*vec4(vertexNormal, 1.0)));
 
-    // Calculate final vertex position
     uv = vec2(mvp*vec4(vertexPosition, 1.0));
+    uv.y *= -1.0;
+    uv = (uv + 1.0) / 2.0;
+    uv = uv * resolution + window_position;
+    uv /= display_resolution;
+    uv = uv * 2.0 - 1.0;
+    uv.y *= -1.0;
+    uv.x *= display_resolution.x / display_resolution.y;
+
+    // Calculate final vertex position
     gl_Position = mvp*vec4(vertexPosition, 1.0);
 }

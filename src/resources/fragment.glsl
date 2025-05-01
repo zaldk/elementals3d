@@ -20,6 +20,8 @@ uniform float time;
 uniform vec3[MAX_BOXES] boxes;
 uniform int num_boxes;
 uniform vec3 viewPos;
+uniform vec3 bg_color_1;
+uniform vec3 bg_color_2;
 
 bool intersectRayAABB(vec3 rayOrig, vec3 rayDir, vec3 boxMin, vec3 boxMax, out float tNear, out float tFar) {
     // Avoid division‑by‑zero by pushing zero components a little
@@ -109,37 +111,37 @@ vec4 fbmd(in vec3 x) {
 }
 
 vec4 fbm_warp(in vec3 p) {
-    return fbmd(p + fbmd(p + time / 100.0 + fbmd(p).x).x);
+    return fbmd(p + time / 10.0 + fbmd(p + fbmd(p).x).x);
 }
 
 void main() {
     vec4 texelColor = texture(texture0, frag_tex_coord);
     vec3 viewD = normalize(viewPos - frag_pos);
 
-    vec3 SUN = vec3(1, 2, -2) * 100;
     vec3 color = frag_color.rgb;
 
     if (length(frag_pos) < 20) {
-        vec3 ro = frag_pos + frag_normal * EPSILON;
+        vec3 SUN = vec3(1, 3, -2) * 100;
         vec3 rd = normalize(SUN);
+        vec3 ro = frag_pos;// + frag_normal * EPSILON;
         for (int i = 0; i < num_boxes; i += 2) {
-            vec3 normal = vec3(0);
             vec3 pos = boxes[i + 0];
             vec3 size = boxes[i + 1];
 
             float tN, tF;
-            if (intersectRayAABB( ro, rd, pos - size/2, pos + size/2, tN, tF)) {
-                color.rgb *= sqrt(tN / tF);
-                break;
+            if (intersectRayAABB(ro, rd, pos - size/2, pos + size/2, tN, tF)) {
+                if (tF > EPSILON) {
+                    color.rgb *= sqrt(tN / tF);
+                    break;
+                }
             }
         }
         color.rgb = clamp(color.rgb, frag_color.rgb * 0.25, frag_color.rgb * 2.0);
     } else {
         vec2 p = uv * 10;
         vec4 n = fbm_warp(vec3(p, 0) * 0.1);
-        // n.x -= mod(n.x, 0.1);
-        vec3 c1 = vec3(0.392, 0.454, 0.545); //vec3(0.341, 0.396, 0.478);
-        vec3 c2 = vec3(0.850, 0.466, 0.023); //vec3(0.956, 0.533, 0.023);
+        vec3 c1 = bg_color_1; //vec3(0.392, 0.454, 0.545); //vec3(0.341, 0.396, 0.478);
+        vec3 c2 = bg_color_2; //vec3(0.850, 0.466, 0.023); //vec3(0.956, 0.533, 0.023);
         color = ( max(n.x, 0.0) * c1 + max(-n.x, 0.0) * c2);// * pow(length(n.yzw), 0.5);
     }
 
