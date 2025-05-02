@@ -14,7 +14,7 @@ draw_board :: proc(board: ^Board) {
         for j in 0..<12 {
             tile := board.tiles[i][j]
             tile_aabb := get_tile_aabb(i,j)
-            draw_cube(tile_aabb, tile.color, false)
+            draw_cube(tile_aabb, tile.color)
             // tile_aabb_wires := Box{ tile_aabb.pos, tile_aabb.size * {0.99, 1, 0.99} }
             // draw_cube_wires(tile_aabb_wires, get_tile_color((i+1)%12,j))
         }
@@ -35,7 +35,7 @@ draw_board :: proc(board: ^Board) {
 draw_elemental :: proc(aabb: Box, data: Elemental) {
     // {{{
     BUMP : f32 : 0.05
-    draw_cube(aabb, ElementColor[data.type][1], true)
+    draw_cube(aabb, ElementColor[data.type][1])
 
     // draw_health(aabb, data)
 
@@ -138,26 +138,11 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
 }
 
 draw_cube :: proc { draw_cube_Vec3, draw_cube_Box }
+draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeV(pos, size, color) }
+draw_cube_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeV(aabb.pos, aabb.size, color) }
+
 draw_cube_wires :: proc { draw_cube_wires_Vec3, draw_cube_wires_Box }
-draw_cube_Vec3 :: proc(pos, size: Vec3, color: Color, send_to_shader: bool = false) {
-    when ENABLED_SHADERS {
-        if send_to_shader {
-            ALL_BOXES[ALL_BOXES_INDEX] = Box{pos, size}
-            ALL_BOXES_INDEX += 1
-        }
-    }
-    rl.DrawCubeV(pos, size, color)
-}
 draw_cube_wires_Vec3 :: proc(pos, size: Vec3, color: Color) { rl.DrawCubeWiresV(pos, size, color) }
-draw_cube_Box :: proc(aabb: Box, color: Color, send_to_shader: bool = false) {
-    when ENABLED_SHADERS {
-        if send_to_shader {
-            ALL_BOXES[ALL_BOXES_INDEX] = aabb
-            ALL_BOXES_INDEX += 1
-        }
-    }
-    rl.DrawCubeV(aabb.pos, aabb.size, color)
-}
 draw_cube_wires_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeWiresV(aabb.pos, aabb.size, color) }
 
 get_tile_color :: proc(i, j: int) -> Color {
