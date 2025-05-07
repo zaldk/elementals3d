@@ -164,8 +164,8 @@ main :: proc() {
 
         render_state := 0 // nothing
         render_state |= 1 // flat color
-        render_state |= 2 // shadows
-        // render_state |= 4 // background
+        // render_state |= 2 // shadows
+        render_state |= 4 // background
         rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "render_state"), &render_state, .INT)
     }
 

@@ -153,10 +153,10 @@ void main() {
                     }
                 }
             } else {
-                color = vec3(1,0,1);
+                // color = vec3(1,0,1);
             }
             // }
-            // color.rgb = clamp(color.rgb, frag_color.rgb * 0.25, frag_color.rgb * 2.0);
+            color.rgb = clamp(color.rgb, frag_color.rgb * 0.1, frag_color.rgb * 2.0);
         }
     }
     if ((render_state & 4) == 4) {

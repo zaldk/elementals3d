@@ -20,7 +20,7 @@ new_board :: proc() -> (board: Board) {
             switch {
             case r < 0.25: {
                 type := rand.choice(elements[2*(j/6):][:num_elements])
-                level := levels[1]
+                level := rand.int_max(3) + 1
                 health := rand.int_max(HEALTH_LEVEL[level]) + 1
                 board.cells[i][j].data = Elemental{ type, level, health }
                 board.cells[i][j].type = .Elemental
