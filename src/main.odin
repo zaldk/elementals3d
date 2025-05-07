@@ -3,6 +3,7 @@ package elementals
 import "core:fmt"
 import "core:strings"
 import "core:math"
+import "core:math/linalg"
 import "core:math/ease"
 import "core:math/rand"
 import "core:mem"
@@ -43,7 +44,7 @@ VERTEX_SHADER :: #load("resources/vertex.glsl", cstring)
 FRAGMENT_SHADER :: #load("resources/fragment.glsl", cstring)
 
 ViewTarget :: enum { Game, Menu, Conf }
-VIEW_TARGET : ViewTarget = .Menu
+VIEW_TARGET : ViewTarget = .Game
 
 Spell :: enum { FS, HV, AF, DT, MS }
 
@@ -109,6 +110,8 @@ ANIMATION := struct {
     to   = {-1,-1},
     duration = 1000,
 }
+ATTACK_FIREBALL_POS : Vec3
+ATTACK_FIREBALL_COLOR : [2]Color
 
 main :: proc() {
     // {{{
@@ -241,11 +244,12 @@ main :: proc() {
                 data_to := cell_to.data
                 aabb_to := get_cell_aabb(ANIMATION.to, data_from.level)
 
+                ATTACK_FIREBALL_COLOR = ElementColor[cell_from.data.type]
+
                 t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
-                if t >= 0 && t < 0.5 {
-                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y].aabb.pos = math.lerp(aabb_from.pos, aabb_to.pos, ease.cubic_in_out(t*2))
-                } else if t >= 0.5 && t < 1 {
-                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y].aabb.pos = math.lerp(aabb_to.pos, aabb_from.pos, ease.cubic_in_out((t-0.5)*2))
+                if t >= 0 && t <= 1 {
+                    ATTACK_FIREBALL_POS = math.lerp(aabb_from.pos, aabb_to.pos, t)
+                    ATTACK_FIREBALL_POS.y = math.sqrt(linalg.length(aabb_from.pos.xz - aabb_to.pos.xz)) * (-4 * t * t + 4 * t)
                 } else {
                     cell_to.data.health = math.clamp(data_to.health - DAMAGE_LEVEL[data_from.level], 0, HEALTH_LEVEL[data_to.level])
                     if cell_to.data.health == 0 {
@@ -262,6 +266,7 @@ main :: proc() {
                     ANIMATION.start = 0
                     ANIMATION.from = -1
                     ANIMATION.to = -1
+                    ATTACK_FIREBALL_POS = {}
                 }
             }
             case .Spell: {}
@@ -312,7 +317,7 @@ main :: proc() {
                     ANIMATION.active = true
                     ANIMATION.type = .Move
                     ANIMATION.start = get_time()
-                    ANIMATION.duration = 500
+                    ANIMATION.duration = 1000
                     ANIMATION.from = SELECTED_CELL
                     ANIMATION.to = HOVERING_CELL
                 }
@@ -321,7 +326,7 @@ main :: proc() {
                     ANIMATION.active = true
                     ANIMATION.type = .Attack
                     ANIMATION.start = get_time()
-                    ANIMATION.duration = 300
+                    ANIMATION.duration = 1000
                     ANIMATION.from = SELECTED_CELL
                     ANIMATION.to = HOVERING_CELL
                 }
@@ -385,7 +390,8 @@ main :: proc() {
             rl.ClearBackground({0,0,0,255})
 
             switch VIEW_TARGET {
-            case .Game: rl.BeginMode3D(CAMERA); {
+            case .Game: {
+                rl.BeginMode3D(CAMERA); {
                     when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
                     rl.DrawCubeV( {-50,0,0}, {0.01,1,1}*100, BLACK) //{0,255,255,255} )
                     rl.DrawCubeV( {0,-50,0}, {1,0.01,1}*100, BLACK) //{255,0,255,255} )
@@ -399,18 +405,25 @@ main :: proc() {
                     if DRAW_BOARD {
                         draw_all_elemental_wires(&BOARD)
                         draw_all_healths(&BOARD)
+
+                        if ATTACK_FIREBALL_POS != ([3]f32{0,0,0}) {
+                            c := ATTACK_FIREBALL_COLOR
+                            rl.DrawSphere(ATTACK_FIREBALL_POS, 0.15, c[0])
+                            rl.DrawSphere(ATTACK_FIREBALL_POS, 0.25, { c[1].r, c[1].g, c[1].b, 127 })
+                            // rl.DrawSphereWires(ATTACK_FIREBALL_POS, 0.26, 16, 16, ATTACK_FIREBALL_COLOR[1])
+                        }
                     }
 
                     // rl.DrawLine3D({0,2,0}, {0,2,0} + {1,0,0}, {255, 0, 0, 255})
                     // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,1,0}, {0, 255, 0, 255})
                     // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,0,1}, {0, 0, 255, 255})
                 }; rl.EndMode3D()
-
                 for ostr, i in debug_info[:] {
                     cstr := strings.clone_to_cstring(ostr)
                     defer delete(cstr)
                     rl.DrawText(cstr, 20, 20 + 40*i32(i), 20, rl.RAYWHITE)
                 }
+            }
             case .Menu: {
                 bg_color :: Color{ 0x20, 0x20, 0x20, 255}
                 rl.ClearBackground(bg_color)
@@ -444,21 +457,21 @@ main :: proc() {
                 rl.DrawText(text_play,
                     i32(btn_pos_play.x + btn_size.x/2 - text_play_size.x/2),
                     i32(btn_pos_play.y + btn_size.y/2 - text_play_size.y/2),
-                64, color_play_fg[state_play])
+                    64, color_play_fg[state_play])
 
                 rl.DrawRectangleV(btn_pos_conf, btn_size, color_conf_fg[state_conf])
                 rl.DrawRectangleV(btn_pos_conf + 10, btn_size - 20, color_conf_bg[state_conf])
                 rl.DrawText(text_conf,
                     i32(btn_pos_conf.x + btn_size.x/2 - text_conf_size.x/2),
                     i32(btn_pos_conf.y + btn_size.y/2 - text_conf_size.y/2),
-                64, color_conf_fg[state_conf])
+                    64, color_conf_fg[state_conf])
 
                 rl.DrawRectangleV(btn_pos_quit, btn_size, color_quit_fg[state_quit])
                 rl.DrawRectangleV(btn_pos_quit + 10, btn_size - 20, color_quit_bg[state_quit])
                 rl.DrawText(text_quit,
                     i32(btn_pos_quit.x + btn_size.x/2 - text_quit_size.x/2),
                     i32(btn_pos_quit.y + btn_size.y/2 - text_quit_size.y/2),
-                64, color_quit_fg[state_quit])
+                    64, color_quit_fg[state_quit])
 
                 switch {
                 case action_play: VIEW_TARGET = .Game
