@@ -35,8 +35,8 @@ SELECTED_CELL := [2]int{-1, -1}
 HOVERING_CELL := [2]int{-1, -1}
 
 MAX_BOXES :: 1024
-ALL_BOXES_INDEX := 0
-ALL_BOXES : [MAX_BOXES]Box
+// ALL_BOXES_INDEX := 0
+// ALL_BOXES : [MAX_BOXES]Box
 
 DRAW_BOARD := true
 
@@ -161,6 +161,12 @@ main :: proc() {
 
         display_resolution := [2]f32{ f32(rl.GetMonitorWidth(rl.GetCurrentMonitor())), f32(rl.GetMonitorHeight(rl.GetCurrentMonitor())) }
         rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "display_resolution"), raw_data(display_resolution[:]), .VEC2)
+
+        render_state := 0 // nothing
+        render_state |= 1 // flat color
+        render_state |= 2 // shadows
+        // render_state |= 4 // background
+        rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "render_state"), &render_state, .INT)
     }
 
     BOARD := new_board()
@@ -171,31 +177,33 @@ main :: proc() {
     for !rl.WindowShouldClose() && !quit {
         // {{{ Collision Calculation
         COLLISION = rl.RayCollision{ distance = math.F32_MAX }
-        for i in 0..<12 {
-            for j in 0..<12 {
-                tile := get_tile_aabb(i,j)
-                tile_collision := raytrace(tile.pos - tile.size/2, tile.pos + tile.size/2)
+        if VIEW_TARGET == .Game {
+            for i in 0..<12 {
+                for j in 0..<12 {
+                    tile := get_tile_aabb(i,j)
+                    tile_collision := raytrace(tile.pos - tile.size/2, tile.pos + tile.size/2)
 
-                cell_collision := tile_collision
-                if BOARD.cells[i][j].type == .Elemental {
-                    cell := get_cell_aabb(i, j, BOARD.cells[i][j].data.level)
-                    cell_collision = raytrace(cell.pos - cell.size/2, cell.pos + cell.size/2)
-                }
+                    cell_collision := tile_collision
+                    if BOARD.cells[i][j].type == .Elemental {
+                        cell := get_cell_aabb(i, j, BOARD.cells[i][j].data.level)
+                        cell_collision = raytrace(cell.pos - cell.size/2, cell.pos + cell.size/2)
+                    }
 
-                switch {
-                case !tile_collision.hit && !cell_collision.hit: continue
+                    switch {
+                    case !tile_collision.hit && !cell_collision.hit: continue
 
-                case !tile_collision.hit && cell_collision.hit:
-                    if COLLISION.distance > cell_collision.distance { COLLISION = cell_collision }
+                    case !tile_collision.hit && cell_collision.hit:
+                        if COLLISION.distance > cell_collision.distance { COLLISION = cell_collision }
 
-                case tile_collision.hit && !cell_collision.hit:
-                    if COLLISION.distance > tile_collision.distance { COLLISION = tile_collision }
+                    case tile_collision.hit && !cell_collision.hit:
+                        if COLLISION.distance > tile_collision.distance { COLLISION = tile_collision }
 
-                case tile_collision.hit && cell_collision.hit: {
-                    min_collision := tile_collision
-                    if min_collision.distance > cell_collision.distance { min_collision = cell_collision }
-                    if COLLISION.distance > min_collision.distance { COLLISION = min_collision }
-                }
+                    case tile_collision.hit && cell_collision.hit: {
+                        min_collision := tile_collision
+                        if min_collision.distance > cell_collision.distance { min_collision = cell_collision }
+                        if COLLISION.distance > min_collision.distance { COLLISION = min_collision }
+                    }
+                    }
                 }
             }
         }
@@ -310,7 +318,7 @@ main :: proc() {
         case key == .R: { VIEW_TARGET = .Menu }// ViewTarget((int(VIEW_TARGET)+1) % len(ViewTarget)) }
         }
 
-        if !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
+        if VIEW_TARGET == .Game && !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
             if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
                 if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Empty &&
                    BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
@@ -364,13 +372,19 @@ main :: proc() {
 
         // {{{ SHADERS are awesome
         when ENABLED_SHADERS {
-            for i in 0..<ALL_BOXES_INDEX {
-                shader_add_box(shader, ALL_BOXES[i], i)
+            for y in 0..<12 {
+                for x in 0..<12 {
+                    cell := BOARD.cells[y][x]
+                    if cell.type == .Elemental {
+                        shader_add_box(shader, cell.aabb, x + y * 12)
+                    } else {
+                        shader_add_box(shader, Box{}, x + y * 12)
+                    }
+                }
             }
-            num_boxes := ALL_BOXES_INDEX * 2
-            rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "num_boxes"), &num_boxes, .INT)
-            ALL_BOXES_INDEX = 0
-            ALL_BOXES := [MAX_BOXES]Box{}
+            // num_boxes := ALL_BOXES_INDEX * 2
+            // rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "num_boxes"), &num_boxes, .INT)
+            // ALL_BOXES_INDEX = 0
 
             rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), .VEC3)
             // rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "plane_height"), &PLANE_HEIGHT, .FLOAT)
@@ -487,6 +501,7 @@ main :: proc() {
             rl.DrawFPS(0,0)
         }; rl.EndDrawing()
         // }}}
+        defer free_all(context.temp_allocator)
     }
     // }}}
     // }}}
