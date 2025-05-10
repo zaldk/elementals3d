@@ -1,5 +1,6 @@
 package elementals
 
+import "core:fmt"
 import "core:math/rand"
 import "core:strings"
 import rl "vendor:raylib"
@@ -48,6 +49,20 @@ merge_board :: proc(board: ^Board) {
         {{+1, -1}, {+0, +0}, {-1, +1}},
     }
     // }}}
+}
+
+cell_info :: proc(pos: [2]int, expected_type: CellType) -> (data: Elemental, aabb: Box, ok: bool) {
+    if !valid(pos) { return }
+
+    cell := BOARD.cells[pos.x][pos.y]
+    if cell.type != expected_type { return }
+
+    data = cell.data
+    if data.type == .Invalid { return }
+
+    aabb = get_cell_aabb(pos, data.level)
+    ok = true
+    return
 }
 
 measure_text :: proc(text: string, text_size: f32 = 64) -> [2]f32 {

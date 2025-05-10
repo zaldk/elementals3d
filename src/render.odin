@@ -159,7 +159,9 @@ get_tile_color :: proc(i, j: int) -> Color {
     // }}}
 }
 
-get_cell_size :: proc(level := 1) -> Vec3 { return {1, 0.75, 1} * 0.5 * math.pow(f32(level), 0.2) }
+get_cell_size :: proc(level := 1) -> Vec3 {
+    return {1, 0.75, 1} * 0.5 * math.pow(f32(level), 0.2)
+}
 get_cell_pos :: proc(i,j: int, level := 1) -> Vec3 {
     return { f32(i), get_cell_size(level).y / 2, f32(j) } - {5.5,0,5.5}
 }
@@ -252,8 +254,7 @@ equal_floor :: proc(a, b: Vec3) -> bool {
 }
 
 valid :: proc(grid_pos: [2]int) -> bool {
-    return grid_pos.x != -1 && grid_pos.y != -1 &&
-           grid_pos.x >=  0 && grid_pos.y <= 11 &&
+    return grid_pos.x >=  0 && grid_pos.y <= 11 &&
            grid_pos.x >=  0 && grid_pos.y <= 11
 }
 

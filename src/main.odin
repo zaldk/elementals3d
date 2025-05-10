@@ -44,7 +44,7 @@ VERTEX_SHADER :: #load("resources/vertex.glsl", cstring)
 FRAGMENT_SHADER :: #load("resources/fragment.glsl", cstring)
 
 ViewTarget :: enum { Game, Menu, Conf }
-VIEW_TARGET : ViewTarget = .Game
+VIEW_TARGET : ViewTarget = .Menu
 
 Spell :: enum { FS, HV, AF, DT, MS }
 
@@ -54,7 +54,7 @@ Box :: struct {
 }
 
 ElementColor := [Element][2]Color{
-    .Error  = { {0,0,0,255}, {255,0,255,255} },
+    .Invalid  = { {0,0,0,255}, {255,0,255,255} },
     .Air    = { TW(.CYAN5   ), TW(.SKY3    ) }, // {{ 0x06, 0xB6, 0xD4, 0xFF }, { 0x7D, 0xD3, 0xFC, 0xFF }},
     .Fire   = { TW(.ORANGE4 ), TW(.RED6    ) }, // {{ 0xFB, 0x92, 0x3C, 0xFF }, { 0xDC, 0x26, 0x26, 0xFF }},
     .Rock   = { TW(.ZINC5   ), TW(.ZINC7   ) }, // {{ 0x71, 0x71, 0x7A, 0xFF }, { 0x3F, 0x3F, 0x46, 0xFF }},
@@ -62,7 +62,7 @@ ElementColor := [Element][2]Color{
     .Nature = { TW(.GREEN5  ), TW(.TEAL6   ) }, // {{ 0x22, 0xC5, 0x5E, 0xFF }, { 0x0D, 0x94, 0x88, 0xFF }},
     .Energy = { TW(.FUCHSIA5), TW(.VIOLET7 ) }, // {{ 0xD9, 0x46, 0xEF, 0xFF }, { 0x6D, 0x28, 0xD9, 0xFF }},
 }
-Element :: enum { Error, Air, Fire, Rock, Water, Nature, Energy }
+Element :: enum { Invalid, Air, Fire, Rock, Water, Nature, Energy }
 Elemental :: struct {
     type: Element,
     level: int,
@@ -90,11 +90,12 @@ Board :: struct {
     tiles: [12][12]Tile,
     turn: int, // even=Blue odd=Green
 }
+BOARD : Board
 
-// ActionType :: enum { Move, Attack, Spell, Skip }
-// Action :: struct {
-//     type: ActionType,
-// }
+ActionType :: enum { Move, Attack, Spell, Skip }
+Action :: struct {
+    type: ActionType,
+}
 
 AnimationType :: enum { Move, Attack, Spell }
 ANIMATION := struct {
@@ -165,11 +166,11 @@ main :: proc() {
         render_state := 0 // nothing
         render_state |= 1 // flat color
         // render_state |= 2 // shadows
-        render_state |= 4 // background
+        // render_state |= 4 // background
         rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "render_state"), &render_state, .INT)
     }
 
-    BOARD := new_board()
+    BOARD = new_board()
     // }}}
 
     // {{{ The Game Loop
@@ -213,26 +214,20 @@ main :: proc() {
         if ANIMATION.active {
             switch ANIMATION.type {
             case .Move: {
-                assert(valid(ANIMATION.from))
-                cell_from := BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
-                assert(cell_from.type == .Elemental)
-                data_from := cell_from.data
-                aabb_from := get_cell_aabb(ANIMATION.from, data_from.level)
+                cell_from := &BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
+                data_from, aabb_from := cell_info(ANIMATION.from, .Elemental) or_break
 
-                assert(valid(ANIMATION.to))
-                cell_to := BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
-                assert(cell_to.type == .Empty)
-                data_to := cell_to.data
-                aabb_to := get_cell_aabb(ANIMATION.to, data_from.level)
+                cell_to := &BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
+                _, aabb_to := cell_info(ANIMATION.to, .Empty) or_break
 
                 t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
                 t = ease.cubic_in_out(t)
                 if t >= 0 && t <= 1 {
-                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y].aabb.pos = math.lerp(aabb_from.pos, aabb_to.pos, t)
+                    cell_from.aabb.pos = math.lerp(aabb_from.pos, aabb_to.pos, t)
                 } else {
-                    BOARD.cells[ANIMATION.to.x][ANIMATION.to.y] = BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
-                    BOARD.cells[ANIMATION.to.x][ANIMATION.to.y].aabb = get_cell_aabb(ANIMATION.to, data_from.level)
-                    BOARD.cells[ANIMATION.from.x][ANIMATION.from.y] = Cell{ type = .Empty }
+                    cell_to^ = cell_from^
+                    cell_to.aabb = get_cell_aabb(ANIMATION.to, data_from.level)
+                    cell_from^ = Cell{ type = .Empty }
                     ANIMATION.active = false
                     ANIMATION.start = 0
                     ANIMATION.from = -1
@@ -240,19 +235,13 @@ main :: proc() {
                 }
             }
             case .Attack: {
-                assert(valid(ANIMATION.from))
                 cell_from := &BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
-                assert(cell_from.type == .Elemental)
-                data_from := cell_from.data
-                aabb_from := get_cell_aabb(ANIMATION.from, data_from.level)
+                data_from, aabb_from := cell_info(ANIMATION.from, .Elemental) or_break
 
-                assert(valid(ANIMATION.to))
                 cell_to := &BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
-                assert(cell_from.type == .Elemental)
-                data_to := cell_to.data
-                aabb_to := get_cell_aabb(ANIMATION.to, data_from.level)
+                data_to, aabb_to := cell_info(ANIMATION.to, .Elemental) or_break
 
-                ATTACK_FIREBALL_COLOR = ElementColor[cell_from.data.type]
+                ATTACK_FIREBALL_COLOR = ElementColor[data_from.type]
 
                 t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
                 if t >= 0 && t <= 1 {
@@ -265,8 +254,8 @@ main :: proc() {
                         if cell_to.data.level == 0 {
                             BOARD.cells[ANIMATION.to.x][ANIMATION.to.y] = Cell{}
                         } else {
-                            cell_to.data.health = HEALTH_LEVEL[cell_to.data.level]
-                            cell_to.aabb.size = get_cell_size(cell_to.data.level)
+                            cell_to.data.health = HEALTH_LEVEL[data_to.level]
+                            cell_to.aabb.size = get_cell_size(data_to.level)
                         }
                     }
                     SELECTED_CELL = {-1,-1}
@@ -351,7 +340,7 @@ main :: proc() {
         // }}}
 
         // {{{ DEBUG INFO
-        debug_info : [2]string
+        debug_info : [3]string
         if DRAW_BOARD && valid(SELECTED_CELL) {
             debug_info[0] = fmt.tprintf("Selected: %v", SELECTED_CELL)
             if BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
@@ -367,6 +356,9 @@ main :: proc() {
             } else {
                 debug_info[1] = fmt.tprintf("%v %v", debug_info[1], BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type)
             }
+        }
+        if DRAW_BOARD {
+            debug_info[2] = fmt.tprintf("%#v", ANIMATION)
         }
         // }}}
 
