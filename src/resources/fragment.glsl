@@ -112,9 +112,11 @@ vec4 fbmd(in vec3 x) {
 }
 
 vec4 fbm_warp(in vec3 p) {
+    float ts = sin(time / 100.0);
+    float tc = cos(time / 100.0);
     // return fbmd(p + time / 100.0);
     // return fbmd(p + fbmd(p + time / 100.0).x);
-    return fbmd(p + fbmd(p + fbmd(p + time / 100.0).x).x);
+    return fbmd(p + fbmd(p + tc + fbmd(p + ts).x).x);
 }
 
 float length_sq(in vec3 v) { return v.x*v.x + v.y*v.y + v.z*v.z; }

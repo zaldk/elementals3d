@@ -26,7 +26,7 @@ draw_board :: proc(board: Board) {
             case .Empty: continue
             case .Block: panic("\n\tTODO: implement Block rendering")
             case .Elemental: draw_elemental(board.cells[i][j].aabb, board.cells[i][j].data)
-            case .Invalid: panic("How?")
+            case .None: panic("How?")
             }
         }
     }
@@ -139,7 +139,7 @@ highlight_cell :: proc(board: Board, pos: [2]int) {
 
 draw_path :: proc(pos: [2]int, path: []Direction) {
     sum := pos
-    for i in 0..<get_path_length(path[:]) {
+    for i in 0..<get_path_length(path) {
         draw_arrow(sum, path[i])
         sum += DirectionDelta[path[i]]
     }
@@ -218,7 +218,7 @@ shader_add_box :: proc(shader: rl.Shader, box: Box, index: int) {
        box.size.x < 0 || box.size.x > 2 ||
        box.size.y < 0 || box.size.y > 2 ||
        box.size.z < 0 || box.size.z > 2 {
-        fmt.println(box)
+        fmt.printfln("File %v Line %v: Box outside the board %v", #file, #line, box)
     }
 
     pos_loc_cstr  := strings.clone_to_cstring(fmt.tprintf("boxes[%v]", index*2 + 0))

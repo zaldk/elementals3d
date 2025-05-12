@@ -7,4 +7,4 @@ if [[ ! -d $BUILD_DIR ]]; then
     echo "*" > $BUILD_DIR/.gitignore
 fi
 
-odin run ./src -out:$BUILD_DIR/elementals -define:SHADERS=true -define:VR=true "$@"
+odin run ./src -out:$BUILD_DIR/elementals -define:SHADERS=true -define:VR=false "$@"
