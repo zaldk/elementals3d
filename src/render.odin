@@ -8,7 +8,7 @@ import "core:strings"
 import rl "vendor:raylib"
 import tw "tailwind"
 
-draw_board :: proc(board: ^Board) {
+draw_board :: proc(board: Board) {
     // {{{
     for i in 0..<12 {
         for j in 0..<12 {
@@ -26,6 +26,7 @@ draw_board :: proc(board: ^Board) {
             case .Empty: continue
             case .Block: panic("\n\tTODO: implement Block rendering")
             case .Elemental: draw_elemental(board.cells[i][j].aabb, board.cells[i][j].data)
+            case .Invalid: panic("How?")
             }
         }
     }
@@ -78,7 +79,7 @@ draw_elemental_wires :: proc(aabb: Box, data: Elemental) {
     // }}}
 }
 
-draw_all_elemental_wires :: proc(board: ^Board) {
+draw_all_elemental_wires :: proc(board: Board) {
     // {{{
     for i in 0..<12 {
         for j in 0..<12 {
@@ -89,7 +90,7 @@ draw_all_elemental_wires :: proc(board: ^Board) {
     // }}}
 }
 
-draw_all_healths :: proc(board: ^Board) {
+draw_all_healths :: proc(board: Board) {
     // {{{
     for i in 0..<12 {
         for j in 0..<12 {
@@ -122,19 +123,60 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
         draw_cube(hp, empty ? TW(.SLATE5) : damaged ? TW(.RED5) : TW(.YELLOW4))
         // draw_cube_wires(hp, BLACK)
     }
-    // case 3: {
-    //     hp_positions := [?]Vec3{
-    //         {
-    //             aabb.pos.x + (-aabb.size.x/2 + hp_gap + hp_width/2 + 0*(hp_gap + hp_width)) * (_reverse ? -1 : 1),
-    //             aabb.pos.y,
-    //             aabb.pos.z + aabb.size.z/2 * (_reverse ? -1 : 1),
-    //         },
-    //     }
-    // }
     }
 
     if _reverse { draw_health(aabb, data, damage, false) }
     // }}}
+}
+
+highlight_cell :: proc(board: Board, pos: [2]int) {
+    // color := get_tile_color(pos.x, pos.y)
+    color := Color{255,255,255, 51}
+    aabb := get_tile_aabb(pos.x, pos.y)
+    aabb.size.y *= 1.1
+    draw_cube(aabb, color)
+}
+
+draw_path :: proc(pos: [2]int, path: []Direction) {
+    sum := pos
+    for i in 0..<get_path_length(path[:]) {
+        draw_arrow(sum, path[i])
+        sum += DirectionDelta[path[i]]
+    }
+}
+
+draw_arrow :: proc(pos: [2]int, dir: Direction) {
+    di := DirectionDelta[dir]
+    d := [2]f32{f32(di.x), f32(di.y)}
+    // 0.75 rod + 0.25 tip
+    rod := get_tile_aabb(pos.x, pos.y)
+    rod.pos.x += d.x * (0.5 - 0.125)
+    rod.pos.z += d.y * (0.5 - 0.125)
+    rod.size.x = math.abs(d.x) * (0.25 + 0.125)
+    rod.size.z = math.abs(d.y) * (0.25 + 0.125)
+    rod.pos.y = 0.015
+    rod.size.x = math.max(rod.size.x, 0.1)
+    rod.size.y = 0.01
+    rod.size.z = math.max(rod.size.z, 0.1)
+    draw_cube(rod, {255,255,255,153})
+
+    tip : [3]Vec3
+    tip.x = get_tile_aabb(pos.x, pos.y).pos
+    tip.y = tip.x
+    tip.z = tip.x
+    tip.x.y = 0.015; tip.y.y = 0.015; tip.z.y = 0.015
+
+    tip.x.x += d.x * 0.5 + (d.y != 0 ? 0.125 : 0)
+    tip.x.z += d.y * 0.5 + (d.x != 0 ? 0.125 : 0)
+
+    tip.y.x += d.x * 0.75
+    tip.y.z += d.y * 0.75
+
+    tip.z.x += d.x * 0.5 - (d.y != 0 ? 0.125 : 0)
+    tip.z.z += d.y * 0.5 - (d.x != 0 ? 0.125 : 0)
+
+    rl.DrawTriangle3D(tip.x, tip.y, tip.z, {255,255,255,153})
+    rl.DrawTriangle3D(tip.z, tip.y, tip.x, {255,255,255,153})
 }
 
 draw_cube :: proc { draw_cube_Vec3, draw_cube_Box }
@@ -148,7 +190,7 @@ draw_cube_wires_Box :: proc(aabb: Box, color: Color) { rl.DrawCubeWiresV(aabb.po
 get_tile_color :: proc(i, j: int) -> Color {
     // {{{
     tile_color : Color = {0, 0, 0, 255}
-    tile_blue := j >= 6
+    tile_blue := j < 6
     tile_dark := (i+j) % 2 == 0
     if  tile_blue &&  tile_dark { tile_color = TW(.BLUE5)  } // TW(.INDIGO7) }
     if  tile_blue && !tile_dark { tile_color = TW(.BLUE4)  } // TW(.INDIGO6) }
@@ -194,11 +236,13 @@ shader_add_box :: proc(shader: rl.Shader, box: Box, index: int) {
 
 get_cell_aabb :: proc { get_cell_aabb_ij, get_cell_aabb_2int }
 get_cell_aabb_ij :: proc(i, j, level: int) -> Box {
+    if level == 0 { return Box{} }
     cell_pos := get_cell_pos(i, j, level)
     cell_size := get_cell_size(level)
     return { cell_pos, cell_size }
 }
 get_cell_aabb_2int :: proc(pos: [2]int, level: int) -> Box {
+    if level == 0 { return Box{} }
     cell_pos := get_cell_pos(pos.x, pos.y, level)
     cell_size := get_cell_size(level)
     return { cell_pos, cell_size }
@@ -254,8 +298,8 @@ equal_floor :: proc(a, b: Vec3) -> bool {
 }
 
 valid :: proc(grid_pos: [2]int) -> bool {
-    return grid_pos.x >=  0 && grid_pos.y <= 11 &&
-           grid_pos.x >=  0 && grid_pos.y <= 11
+    return grid_pos.x >= 0 && grid_pos.x <= 11 &&
+           grid_pos.y >= 0 && grid_pos.y <= 11
 }
 
 rotate_camera :: proc(direction: int) {
@@ -271,8 +315,16 @@ rotate_camera :: proc(direction: int) {
     // }}}
 }
 
+get_cell :: proc(board: Board, pos: [2]int) -> Cell {
+    return board.cells[pos.x][pos.y]
+}
+
 get_time :: proc() -> f32 {
     return f32(rl.GetTime()) * 1000
+}
+
+measure_text :: proc(text: string, text_size: f32 = 64) -> [2]f32 {
+    return rl.MeasureTextEx(rl.GetFontDefault(), strings.unsafe_string_to_cstring(text), text_size, 0)
 }
 
 // ================================================================================

@@ -19,6 +19,7 @@ BLACK :: Color{0,0,0,255}
 WHITE :: Color{255,255,255,255}
 
 ENABLED_SHADERS :: #config(SHADERS, false)
+ENABLED_VR :: #config(VR, false)
 TARGET_FPS :: 120
 EPSILON :: 0.001
 HEALTH_LEVEL := [?]int{ -1, 1, 2, 6 }
@@ -40,13 +41,13 @@ MAX_BOXES :: 1024
 
 DRAW_BOARD := true
 
+SHADER : rl.Shader
 VERTEX_SHADER :: #load("resources/vertex.glsl", cstring)
 FRAGMENT_SHADER :: #load("resources/fragment.glsl", cstring)
+DISTORTION_SHADER :: #load("resources/distortion.glsl", cstring)
 
-ViewTarget :: enum { Game, Menu, Conf }
+ViewTarget :: enum { Invalid, Game, Menu, Conf }
 VIEW_TARGET : ViewTarget = .Menu
-
-Spell :: enum { FS, HV, AF, DT, MS }
 
 Box :: struct {
     pos: Vec3,
@@ -62,7 +63,7 @@ ElementColor := [Element][2]Color{
     .Nature = { TW(.GREEN5  ), TW(.TEAL6   ) }, // {{ 0x22, 0xC5, 0x5E, 0xFF }, { 0x0D, 0x94, 0x88, 0xFF }},
     .Energy = { TW(.FUCHSIA5), TW(.VIOLET7 ) }, // {{ 0xD9, 0x46, 0xEF, 0xFF }, { 0x6D, 0x28, 0xD9, 0xFF }},
 }
-Element :: enum { Invalid, Air, Fire, Rock, Water, Nature, Energy }
+Element :: enum byte { Invalid, Air, Fire, Rock, Water, Nature, Energy }
 Elemental :: struct {
     type: Element,
     level: int,
@@ -71,15 +72,14 @@ Elemental :: struct {
 Block :: struct {}
 Empty :: struct {}
 
-CellType :: enum { Empty, Block, Elemental, }
-
+CellType :: enum byte { Invalid, Empty, Block, Elemental, }
 Cell :: struct {
     aabb: Box,
     type: CellType,
     data: Elemental,
 }
 
-PlayerType :: enum { Blue, Green }
+PlayerType :: enum byte { Invalid, Blue, Green }
 Tile :: struct {
     color: Color,
     player: PlayerType,
@@ -88,27 +88,35 @@ Tile :: struct {
 Board :: struct {
     cells: [12][12]Cell,
     tiles: [12][12]Tile,
-    turn: int, // even=Blue odd=Green
 }
-BOARD : Board
 
-ActionType :: enum { Move, Attack, Spell, Skip }
+ActionType :: enum byte { Invalid, Move, Attack, Spell, Skip }
 Action :: struct {
     type: ActionType,
+    pos: [2][2]int, // [from.xy, to.xy]
+    spell: Spell,
 }
 
-AnimationType :: enum { Move, Attack, Spell }
-ANIMATION := struct {
-    active: bool,
+Spell :: enum byte { FS, HV, AF, DT, MS }
+
+GAME : Game
+Game :: struct {
+    board: Board,
+    spell_charges: [len(Spell)]int,
+    turn: int, // even=Blue odd=Green
+}
+
+AnimationType :: enum byte { Invalid, Move, Attack, Spell }
+ANIM := struct {
+    active, valid: bool,
     type: AnimationType,
     duration: f32, // ms
     start:    f32, // ms
-    from: [2]int, // grid positions
-    to:   [2]int, // grid positions
+    pos: [2][2]int, // grid position [from, to]
 }{
     active = false,
-    from = {-1,-1},
-    to   = {-1,-1},
+    valid = false,
+    pos = {{-1, -1}, {-1, -1}},
     duration = 1000,
 }
 ATTACK_FIREBALL_POS : Vec3
@@ -141,36 +149,87 @@ main :: proc() {
     defer rl.CloseWindow()
     rl.SetTargetFPS(TARGET_FPS)
 
-    CAMERA.position = { 6, CAM_HEIGHT, 6 }
+    CAMERA.position = { -6, CAM_HEIGHT, -6 }
     CAMERA.target = { 0, 0, 0 }
     CAMERA.up = { 0, 1, 0 }
     CAMERA.fovy = 15
     CAMERA.projection = .ORTHOGRAPHIC
 
     when ENABLED_SHADERS {
-        shader := rl.LoadShaderFromMemory(VERTEX_SHADER, FRAGMENT_SHADER)
-        defer rl.UnloadShader(shader)
-        shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW] = rl.GetShaderLocation(shader, "viewPos");
+        SHADER = rl.LoadShaderFromMemory(VERTEX_SHADER, FRAGMENT_SHADER)
+        defer rl.UnloadShader(SHADER)
+        SHADER.locs[rl.ShaderLocationIndex.VECTOR_VIEW] = rl.GetShaderLocation(SHADER, "viewPos");
 
         t1 := tw.TW_RANDOM()
         c1 := [3]f32{ f32(t1.r) / 255.0, f32(t1.g) / 255.0, f32(t1.b) / 255.0 }
-        rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "bg_color_1"), raw_data(c1[:]), .VEC3)
+        rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "bg_color_1"), raw_data(c1[:]), .VEC3)
 
         t2 := tw.TW_RANDOM()
         c2 := [3]f32{ f32(t2.r) / 255.0, f32(t2.g) / 255.0, f32(t2.b) / 255.0 }
-        rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "bg_color_2"), raw_data(c2[:]), .VEC3)
+        rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "bg_color_2"), raw_data(c2[:]), .VEC3)
 
         display_resolution := [2]f32{ f32(rl.GetMonitorWidth(rl.GetCurrentMonitor())), f32(rl.GetMonitorHeight(rl.GetCurrentMonitor())) }
-        rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "display_resolution"), raw_data(display_resolution[:]), .VEC2)
+        rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "display_resolution"), raw_data(display_resolution[:]), .VEC2)
 
         render_state := 0 // nothing
         render_state |= 1 // flat color
         // render_state |= 2 // shadows
-        // render_state |= 4 // background
-        rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "render_state"), &render_state, .INT)
+        render_state |= 4 // background
+        when ENABLED_VR {
+            render_state = 1
+        }
+        rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "render_state"), &render_state, .INT)
     }
 
-    BOARD = new_board()
+    when ENABLED_VR {
+        // from https://www.raylib.com/examples/core/loader.html?name=core_vr_simulator
+        // VR device parameters definition
+        device := rl.VrDeviceInfo {
+            // Oculus Rift CV1 parameters for simulator
+            hResolution = 2160,                 // Horizontal resolution in pixels
+            vResolution = 1200,                 // Vertical resolution in pixels
+            hScreenSize = 0.133793,            // Horizontal size in meters
+            vScreenSize = 0.0669,              // Vertical size in meters
+            eyeToScreenDistance = 0.041,       // Distance between eye and display in meters
+            lensSeparationDistance = 0.07,     // Lens separation distance in meters
+            interpupillaryDistance = 0.07,     // IPD (distance between pupils) in meters
+
+            // NOTE: CV1 uses fresnel-hybrid-asymmetric lenses with specific compute shaders
+            // Following parameters are just an approximation to CV1 distortion stereo rendering
+            lensDistortionValues = { 1.0, 0.22, 0.24, 0 },      // Lens distortion constant parameter 0
+            chromaAbCorrection = { 0.996, -0.004, 1.014, 0.0 }, // Chromatic aberration correction parameter 0
+        }
+
+        // Load VR stereo config for VR device parameteres (Oculus Rift CV1 parameters)
+        config := rl.LoadVrStereoConfig(device)
+        defer rl.UnloadVrStereoConfig(config)
+
+        // Distortion shader (uses device lens distortion and chroma)
+        distortion := rl.LoadShaderFromMemory(nil, DISTORTION_SHADER)
+        defer rl.UnloadShader(distortion)
+
+        // Update distortion shader with lens and distortion-scale parameters
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "leftLensCenter"), raw_data(config.leftLensCenter[:]), .VEC2);
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "rightLensCenter"), raw_data(config.rightLensCenter[:]), .VEC2);
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "leftScreenCenter"), raw_data(config.leftScreenCenter[:]), .VEC2);
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "rightScreenCenter"), raw_data(config.rightScreenCenter[:]), .VEC2);
+
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "scale"), raw_data(config.scale[:]), .VEC2);
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "scaleIn"), raw_data(config.scaleIn[:]), .VEC2);
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "deviceWarpParam"), raw_data(device.lensDistortionValues[:]), .VEC4);
+        rl.SetShaderValue(distortion, rl.GetShaderLocation(distortion, "chromaAbParam"), raw_data(device.chromaAbCorrection[:]), .VEC4);
+
+        // Initialize framebuffer for stereo rendering
+        // NOTE: Screen size should match HMD aspect ratio
+        target := rl.LoadRenderTexture(device.hResolution, device.vResolution)
+        defer rl.UnloadRenderTexture(target)
+
+        // The target's height is flipped (in the source Rectangle), due to OpenGL reasons
+        sourceRec := rl.Rectangle{ 0.0, 0.0, f32(target.texture.width), -f32(target.texture.height) }
+        destRec   := rl.Rectangle{ 0.0, 0.0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()) }
+    }
+
+    GAME.board = new_board()
     // }}}
 
     // {{{ The Game Loop
@@ -185,13 +244,14 @@ main :: proc() {
                     tile_collision := raytrace(tile.pos - tile.size/2, tile.pos + tile.size/2)
 
                     cell_collision := tile_collision
-                    if BOARD.cells[i][j].type == .Elemental {
-                        cell := get_cell_aabb(i, j, BOARD.cells[i][j].data.level)
+                    if GAME.board.cells[i][j].type == .Elemental {
+                        cell := get_cell_aabb(i, j, GAME.board.cells[i][j].data.level)
                         cell_collision = raytrace(cell.pos - cell.size/2, cell.pos + cell.size/2)
                     }
 
                     switch {
-                    case !tile_collision.hit && !cell_collision.hit: continue
+                    case !tile_collision.hit && !cell_collision.hit:
+                        continue
 
                     case !tile_collision.hit && cell_collision.hit:
                         if COLLISION.distance > cell_collision.distance { COLLISION = cell_collision }
@@ -199,90 +259,92 @@ main :: proc() {
                     case tile_collision.hit && !cell_collision.hit:
                         if COLLISION.distance > tile_collision.distance { COLLISION = tile_collision }
 
-                    case tile_collision.hit && cell_collision.hit: {
+                    case tile_collision.hit && cell_collision.hit:
                         min_collision := tile_collision
                         if min_collision.distance > cell_collision.distance { min_collision = cell_collision }
                         if COLLISION.distance > min_collision.distance { COLLISION = min_collision }
-                    }
                     }
                 }
             }
         }
         // }}}
 
-        // {{{ Animations + Logic
-        if ANIMATION.active {
-            switch ANIMATION.type {
-            case .Move: {
-                cell_from := &BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
-                data_from, aabb_from := cell_info(ANIMATION.from, .Elemental) or_break
+        // {{{ Animations + Logic Calls
+        if ANIM.active {
+            switch ANIM.type {
+            case .Move:
+                cell_A := &GAME.board.cells[ANIM.pos.x.x][ANIM.pos.x.y]
+                data_A, aabb_A := cell_info(ANIM.pos.x, .Elemental) or_break
 
-                cell_to := &BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
-                _, aabb_to := cell_info(ANIMATION.to, .Empty) or_break
+                cell_B := &GAME.board.cells[ANIM.pos.y.x][ANIM.pos.y.y]
+                data_B, aabb_B := cell_info(ANIM.pos.y, .Empty) or_break
 
-                t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
-                t = ease.cubic_in_out(t)
-                if t >= 0 && t <= 1 {
-                    cell_from.aabb.pos = math.lerp(aabb_from.pos, aabb_to.pos, t)
+                ANIM.valid = true
+
+                t := math.unlerp(ANIM.start, ANIM.start+ANIM.duration, get_time())
+                if ANIM.valid && t >= 0 && t <= 1 {
+                    t = ease.cubic_in_out(t)
+                    cell_A.aabb.pos = math.lerp(aabb_A.pos, get_cell_aabb(ANIM.pos.y, data_A.level).pos, t)
                 } else {
-                    cell_to^ = cell_from^
-                    cell_to.aabb = get_cell_aabb(ANIMATION.to, data_from.level)
-                    cell_from^ = Cell{ type = .Empty }
-                    ANIMATION.active = false
-                    ANIMATION.start = 0
-                    ANIMATION.from = -1
-                    ANIMATION.to = -1
-                }
-            }
-            case .Attack: {
-                cell_from := &BOARD.cells[ANIMATION.from.x][ANIMATION.from.y]
-                data_from, aabb_from := cell_info(ANIMATION.from, .Elemental) or_break
-
-                cell_to := &BOARD.cells[ANIMATION.to.x][ANIMATION.to.y]
-                data_to, aabb_to := cell_info(ANIMATION.to, .Elemental) or_break
-
-                ATTACK_FIREBALL_COLOR = ElementColor[data_from.type]
-
-                t := math.unlerp(ANIMATION.start, ANIMATION.start+ANIMATION.duration, get_time())
-                if t >= 0 && t <= 1 {
-                    ATTACK_FIREBALL_POS = math.lerp(aabb_from.pos, aabb_to.pos, t)
-                    ATTACK_FIREBALL_POS.y = math.sqrt(linalg.length(aabb_from.pos.xz - aabb_to.pos.xz)) * (-4 * t * t + 4 * t)
-                } else {
-                    cell_to.data.health = math.clamp(data_to.health - DAMAGE_LEVEL[data_from.level], 0, HEALTH_LEVEL[data_to.level])
-                    if cell_to.data.health == 0 {
-                        cell_to.data.level -= 1
-                        if cell_to.data.level == 0 {
-                            BOARD.cells[ANIMATION.to.x][ANIMATION.to.y] = Cell{}
-                        } else {
-                            cell_to.data.health = HEALTH_LEVEL[data_to.level]
-                            cell_to.aabb.size = get_cell_size(data_to.level)
-                        }
+                    if ANIM.valid {
+                        apply_action(&GAME, Action{ type = .Move, pos = ANIM.pos }) or_break
                     }
-                    SELECTED_CELL = {-1,-1}
-                    ANIMATION.active = false
-                    ANIMATION.start = 0
-                    ANIMATION.from = -1
-                    ANIMATION.to = -1
+                    ANIM.active = false
+                    ANIM.valid = false
+                    ANIM.start = 0
+                    ANIM.pos.x = -1
+                    ANIM.pos.y = -1
+                }
+
+            case .Attack:
+                cell_A := &GAME.board.cells[ANIM.pos.x.x][ANIM.pos.x.y]
+                data_A, aabb_A := cell_info(ANIM.pos.x, .Elemental) or_break
+
+                cell_B := &GAME.board.cells[ANIM.pos.y.x][ANIM.pos.y.y]
+                data_B, aabb_B := cell_info(ANIM.pos.y, .Elemental) or_break
+
+                ANIM.valid = true
+                ATTACK_FIREBALL_COLOR = ElementColor[data_A.type]
+
+                t := math.unlerp(ANIM.start, ANIM.start+ANIM.duration, get_time())
+                if ANIM.valid && t >= 0 && t <= 1 {
+                    ATTACK_FIREBALL_POS = math.lerp(aabb_A.pos, aabb_B.pos, t)
+                    ATTACK_FIREBALL_POS.y = math.sqrt(linalg.length(aabb_A.pos.xz - aabb_B.pos.xz)) * (-4 * t * t + 4 * t)
+                } else {
+                    if ANIM.valid {
+                        apply_action(&GAME, Action{ type = .Attack, pos = ANIM.pos }) or_break
+                    }
+                    ANIM.active = false
+                    ANIM.valid = false
+                    ANIM.start = 0
+                    ANIM.pos.x = { -1, -1 }
+                    ANIM.pos.y = { -1, -1 }
                     ATTACK_FIREBALL_POS = {}
                 }
-            }
-            case .Spell: {}
+
+            case .Spell: panic("TODO")
+            case .Invalid: panic("How?")
             }
         }
         // }}}
 
         // {{{ Input
-        if !rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y < 0 { CAMERA.fovy *= 1.1 }
-        if !rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y > 0 { CAMERA.fovy *= 0.9 }
-        if  rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y < 0 { rotate_camera(-1) }
-        if  rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y > 0 { rotate_camera(+1) }
-        if rl.GetMouseWheelMoveV().x < 0 { rotate_camera(-1) }
-        if rl.GetMouseWheelMoveV().x > 0 { rotate_camera(+1) }
+        when !ENABLED_VR {
+            if !rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y < 0 { CAMERA.fovy *= 1.1 }
+            if !rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y > 0 { CAMERA.fovy *= 0.9 }
+            if  rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y < 0 { rotate_camera(-1) }
+            if  rl.IsKeyDown(.LEFT_SHIFT) && rl.GetMouseWheelMoveV().y > 0 { rotate_camera(+1) }
+            if rl.GetMouseWheelMoveV().x < 0 { rotate_camera(-1) }
+            if rl.GetMouseWheelMoveV().x > 0 { rotate_camera(+1) }
+        } else {
+            if rl.IsKeyDown(.LEFT_SHIFT) { CAMERA.position.y -= 0.05 }
+            if rl.IsKeyDown(.SPACE)      { CAMERA.position.y += 0.05 }
+        }
 
         if COLLISION.hit {
             i, j := point2grid(COLLISION.point)
             HOVERING_CELL = {i,j}
-            if BOARD.cells[i][j].type == .Elemental {
+            if GAME.board.cells[i][j].type == .Elemental {
                 rl.SetMouseCursor(.POINTING_HAND)
             } else {
                 rl.SetMouseCursor(.DEFAULT)
@@ -291,45 +353,52 @@ main :: proc() {
 
         key := rl.GetKeyPressed()
         switch {
-        case key == .Q && !ANIMATION.active: { BOARD = new_board() }
-        case key == .W: { DRAW_BOARD = !DRAW_BOARD }
-        case key == .E: {
+        case key == .F1: VIEW_TARGET = .Menu
+        case key == .F2 && !ANIM.active: GAME.board = new_board()
+        case key == .F3: DRAW_BOARD = !DRAW_BOARD
+        case key == .F4:
             when ENABLED_SHADERS {
                 t1 := tw.TW_RANDOM()
                 c1 := [3]f32{ f32(t1.r) / 255.0, f32(t1.g) / 255.0, f32(t1.b) / 255.0 }
-                rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "bg_color_1"), raw_data(c1[:]), .VEC3)
+                rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "bg_color_1"), raw_data(c1[:]), .VEC3)
 
                 t2 := tw.TW_RANDOM()
                 c2 := [3]f32{ f32(t2.r) / 255.0, f32(t2.g) / 255.0, f32(t2.b) / 255.0 }
-                rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "bg_color_2"), raw_data(c2[:]), .VEC3)
+                rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "bg_color_2"), raw_data(c2[:]), .VEC3)
             }
-        }
-        case key == .R: { VIEW_TARGET = .Menu }// ViewTarget((int(VIEW_TARGET)+1) % len(ViewTarget)) }
+
         }
 
-        if VIEW_TARGET == .Game && !ANIMATION.active && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
+        if VIEW_TARGET == .Game && !ANIM.active && !ANIM.valid && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
+            unselect_active := true
             if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
-                if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Empty &&
-                   BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
-                    ANIMATION.active = true
-                    ANIMATION.type = .Move
-                    ANIMATION.start = get_time()
-                    ANIMATION.duration = 1000
-                    ANIMATION.from = SELECTED_CELL
-                    ANIMATION.to = HOVERING_CELL
+                if get_cell(GAME.board, HOVERING_CELL).type == .Empty &&
+                   get_cell(GAME.board, SELECTED_CELL).type == .Elemental {
+                    path, found := get_path(GAME.board, { SELECTED_CELL, HOVERING_CELL })
+                    if found {
+                        ANIM.active = true
+                        ANIM.type = .Move
+                        ANIM.start = get_time()
+                        ANIM.duration = 1000
+                        ANIM.pos = { SELECTED_CELL, HOVERING_CELL }
+                    }
                 }
-                if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental &&
-                   BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
-                    ANIMATION.active = true
-                    ANIMATION.type = .Attack
-                    ANIMATION.start = get_time()
-                    ANIMATION.duration = 1000
-                    ANIMATION.from = SELECTED_CELL
-                    ANIMATION.to = HOVERING_CELL
+                if get_cell(GAME.board, HOVERING_CELL).type == .Elemental &&
+                   get_cell(GAME.board, SELECTED_CELL).type == .Elemental {
+                    if SELECTED_CELL.y / 6 == HOVERING_CELL.y / 6 {
+                        SELECTED_CELL = HOVERING_CELL
+                        unselect_active = false
+                    } else {
+                        ANIM.active = true
+                        ANIM.type = .Attack
+                        ANIM.start = get_time()
+                        ANIM.duration = 1000
+                        ANIM.pos = { SELECTED_CELL, HOVERING_CELL }
+                    }
                 }
             }
 
-            if !ANIMATION.active {
+            if !ANIM.active && unselect_active {
                 if equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
                     SELECTED_CELL = {-1,-1}
                 } else {
@@ -343,22 +412,22 @@ main :: proc() {
         debug_info : [3]string
         if DRAW_BOARD && valid(SELECTED_CELL) {
             debug_info[0] = fmt.tprintf("Selected: %v", SELECTED_CELL)
-            if BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
-                debug_info[0] = fmt.tprintf("%v %v", debug_info[0], BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].data)
+            if GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
+                debug_info[0] = fmt.tprintf("%v %v", debug_info[0], GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].data)
             } else {
-                debug_info[0] = fmt.tprintf("%v %v", debug_info[0], BOARD.cells[SELECTED_CELL.x][SELECTED_CELL.y].type)
+                debug_info[0] = fmt.tprintf("%v %v", debug_info[0], GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].type)
             }
         }
         if DRAW_BOARD && valid(HOVERING_CELL) {
             debug_info[1] = fmt.tprintf("Hovering: %v", HOVERING_CELL)
-            if BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
-                debug_info[1] = fmt.tprintf("%v %v", debug_info[1], BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].data)
+            if GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
+                debug_info[1] = fmt.tprintf("%v %v", debug_info[1], GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].data)
             } else {
-                debug_info[1] = fmt.tprintf("%v %v", debug_info[1], BOARD.cells[HOVERING_CELL.x][HOVERING_CELL.y].type)
+                debug_info[1] = fmt.tprintf("%v %v", debug_info[1], GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type)
             }
         }
         if DRAW_BOARD {
-            debug_info[2] = fmt.tprintf("%#v", ANIMATION)
+            debug_info[2] = fmt.tprintf("%#v", ANIM)
         }
         // }}}
 
@@ -366,71 +435,112 @@ main :: proc() {
         when ENABLED_SHADERS {
             for y in 0..<12 {
                 for x in 0..<12 {
-                    cell := BOARD.cells[y][x]
+                    cell := GAME.board.cells[y][x]
                     if cell.type == .Elemental {
-                        shader_add_box(shader, cell.aabb, x + y * 12)
+                        shader_add_box(SHADER, cell.aabb, x + y * 12)
                     } else {
-                        shader_add_box(shader, Box{}, x + y * 12)
+                        shader_add_box(SHADER, Box{}, x + y * 12)
                     }
                 }
             }
             // num_boxes := ALL_BOXES_INDEX * 2
-            // rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "num_boxes"), &num_boxes, .INT)
+            // rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "num_boxes"), &num_boxes, .INT)
             // ALL_BOXES_INDEX = 0
 
-            rl.SetShaderValue(shader, shader.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), .VEC3)
-            // rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "plane_height"), &PLANE_HEIGHT, .FLOAT)
+            rl.SetShaderValue(SHADER, SHADER.locs[rl.ShaderLocationIndex.VECTOR_VIEW], raw_data(CAMERA.position[:]), .VEC3)
+            // rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "plane_height"), &PLANE_HEIGHT, .FLOAT)
             time := f32(rl.GetTime())
-            rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "time"), &time, .FLOAT)
+            rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "time"), &time, .FLOAT)
 
             resolution := [2]f32{ f32(rl.GetRenderWidth()), f32(rl.GetRenderHeight()) }
-            rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "resolution"), raw_data(resolution[:]), .VEC2)
+            rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "resolution"), raw_data(resolution[:]), .VEC2)
 
             window_position := ([2]f32)(rl.GetWindowPosition())
-            rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "window_position"), raw_data(window_position[:]), .VEC2)
+            rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "window_position"), raw_data(window_position[:]), .VEC2)
         }
         // }}}
 
         // {{{ Draw Calls
-        rl.BeginDrawing(); {
-            rl.ClearBackground({0,0,0,255})
+        _draw_3d_helper :: proc() {
+            rl.BeginMode3D(CAMERA); {
+                when ENABLED_SHADERS { rl.BeginShaderMode(SHADER) }
+                rl.DrawCubeV( {-20,0,0}, {0.01,1,1}*40, BLACK) //{0,255,255,255} )
+                rl.DrawCubeV( {0,-20,0}, {1,0.01,1}*40, BLACK) //{255,0,255,255} )
+                rl.DrawCubeV( {0,0,-20}, {1,1,0.01}*40, BLACK) //{255,255,0,255} )
+                rl.DrawCubeV( {20,0,0},  {0.01,1,1}*40, BLACK) //{255,0,0,255} )
+                rl.DrawCubeV( {0,20,0},  {1,0.01,1}*40, BLACK) //{0,255,0,255} )
+                rl.DrawCubeV( {0,0,20},  {1,1,0.01}*40, BLACK) //{0,0,255,255} )
+                if DRAW_BOARD { draw_board(GAME.board) }
+                when ENABLED_SHADERS { rl.EndShaderMode(); }
 
-            switch VIEW_TARGET {
-            case .Game: {
-                rl.BeginMode3D(CAMERA); {
-                    when ENABLED_SHADERS { rl.BeginShaderMode(shader) }
-                    rl.DrawCubeV( {-50,0,0}, {0.01,1,1}*100, BLACK) //{0,255,255,255} )
-                    rl.DrawCubeV( {0,-50,0}, {1,0.01,1}*100, BLACK) //{255,0,255,255} )
-                    rl.DrawCubeV( {0,0,-50}, {1,1,0.01}*100, BLACK) //{255,255,0,255} )
-                    rl.DrawCubeV( {50,0,0},  {0.01,1,1}*100, BLACK) //{255,0,0,255} )
-                    rl.DrawCubeV( {0,50,0},  {1,0.01,1}*100, BLACK) //{0,255,0,255} )
-                    rl.DrawCubeV( {0,0,50},  {1,1,0.01}*100, BLACK) //{0,0,255,255} )
-                    if DRAW_BOARD { draw_board(&BOARD) }
-                    when ENABLED_SHADERS { rl.EndShaderMode(); }
-
-                    if DRAW_BOARD {
-                        draw_all_elemental_wires(&BOARD)
-                        draw_all_healths(&BOARD)
-
-                        if ATTACK_FIREBALL_POS != ([3]f32{0,0,0}) {
-                            c := ATTACK_FIREBALL_COLOR
-                            rl.DrawSphere(ATTACK_FIREBALL_POS, 0.15, c[0])
-                            rl.DrawSphere(ATTACK_FIREBALL_POS, 0.25, { c[1].r, c[1].g, c[1].b, 127 })
-                            // rl.DrawSphereWires(ATTACK_FIREBALL_POS, 0.26, 16, 16, ATTACK_FIREBALL_COLOR[1])
+                if DRAW_BOARD {
+                    draw_all_elemental_wires(GAME.board)
+                    draw_all_healths(GAME.board)
+                    if valid(HOVERING_CELL) { highlight_cell(GAME.board, HOVERING_CELL) }
+                    if valid(SELECTED_CELL) { highlight_cell(GAME.board, SELECTED_CELL) }
+                    if valid(HOVERING_CELL) && valid(SELECTED_CELL) && !ANIM.active {
+                        if get_cell(GAME.board, HOVERING_CELL).type == .Empty &&
+                           get_cell(GAME.board, SELECTED_CELL).type == .Elemental {
+                            path, found := get_path(GAME.board, { SELECTED_CELL, HOVERING_CELL })
+                            if found { draw_path(SELECTED_CELL, path[:]) }
                         }
                     }
 
-                    // rl.DrawLine3D({0,2,0}, {0,2,0} + {1,0,0}, {255, 0, 0, 255})
-                    // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,1,0}, {0, 255, 0, 255})
-                    // rl.DrawLine3D({0,2,0}, {0,2,0} + {0,0,1}, {0, 0, 255, 255})
-                }; rl.EndMode3D()
+                    if ATTACK_FIREBALL_POS != ([3]f32{0,0,0}) {
+                        c := ATTACK_FIREBALL_COLOR
+                        rl.DrawSphere(ATTACK_FIREBALL_POS, 0.15, c[0])
+                        rl.DrawSphere(ATTACK_FIREBALL_POS, 0.25, { c[1].r, c[1].g, c[1].b, 127 })
+                    }
+                }
+                // when ENABLED_VR {
+                //     rl.DrawSphere(CAMERA.position + rl.GetCameraForward(&CAMERA) * 1, 0.01, WHITE)
+                // }
+            }; rl.EndMode3D()
+        }
+        switch VIEW_TARGET {
+        case .Game: {
+            when ENABLED_VR {
+                rl.UpdateCamera(&CAMERA, .FIRST_PERSON)
+                rl.BeginVrStereoMode(config)
+                rl.BeginTextureMode(target); {
+                    rl.ClearBackground(WHITE);
+                    rl.BeginVrStereoMode(config); {
+                        _draw_3d_helper()
+                        w1 : f32 = sourceRec.width/4
+                        w2 : f32 = w1 + sourceRec.width/2
+                        h  : f32 = -sourceRec.height
+                        w  : f32 = 8.0
+                        rl.DrawRectangleV({ w1 - w/2, h/2 }, {w,w}, WHITE)
+                        rl.DrawRectangleV({ w2 - w/2, h/2 }, {w,w}, WHITE)
+                    }; rl.EndVrStereoMode();
+                }; rl.EndTextureMode();
+
+                if rl.IsCursorOnScreen() { rl.DisableCursor() }
+            }
+            rl.BeginDrawing(); {
+                rl.ClearBackground({0,0,0,255})
+
+                when ENABLED_VR {
+                    rl.BeginShaderMode(distortion)
+                    rl.DrawTexturePro(target.texture, sourceRec, destRec, { 0, 0 }, 0, WHITE)
+                    rl.EndShaderMode()
+                } else {
+                    _draw_3d_helper()
+                }
+
                 for ostr, i in debug_info[:] {
                     cstr := strings.clone_to_cstring(ostr)
                     defer delete(cstr)
                     rl.DrawText(cstr, 20, 20 + 40*i32(i), 20, rl.RAYWHITE)
                 }
             }
-            case .Menu: {
+            rl.DrawFPS(0,0)
+        }; rl.EndDrawing()
+        case .Menu: {
+            if rl.IsCursorHidden() { rl.EnableCursor() }
+            rl.BeginDrawing(); {
+                rl.ClearBackground({0,0,0,255})
+
                 bg_color :: Color{ 0x20, 0x20, 0x20, 255}
                 rl.ClearBackground(bg_color)
                 w := f32(rl.GetScreenWidth())
@@ -485,13 +595,15 @@ main :: proc() {
                 case action_quit: quit = true
                 }
             }
-            case .Conf: {
-                rl.DrawText("Here be dragons", 100, 100, 64, TW(.ROSE5))
-            }
-            }
-
-            rl.DrawFPS(0,0)
         }; rl.EndDrawing()
+        case .Conf: {
+            rl.BeginDrawing(); {
+                rl.ClearBackground({0,0,0,255})
+                rl.DrawText("Here be dragons", 100, 100, 64, TW(.ROSE5))
+            }; rl.EndDrawing()
+        }
+        case .Invalid: panic("How?")
+        }
         // }}}
         defer free_all(context.temp_allocator)
     }
