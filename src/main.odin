@@ -118,7 +118,7 @@ Game :: struct {
     used_spell, used_move, used_attack: bool,
 }
 
-AnimationType :: enum byte { None, Move, Attack, Spell }
+AnimationType :: enum byte { None, Move, Attack, Spell, Skip }
 Animation :: struct {
     active, valid: bool,
     type: AnimationType,
@@ -202,7 +202,7 @@ main :: proc() {
         render_state := 0 // nothing
         render_state |= 1 // flat color
         // render_state |= 2 // shadows
-        render_state |= 4 // background
+        // render_state |= 4 // background
         when ENABLED_VR {
             render_state = 1
         }
@@ -321,11 +321,8 @@ main :: proc() {
                     if ANIM.valid {
                         apply_action(&GAME, Action{ type = .Move, pos = ANIM.pos }) or_break
                     }
-                    ANIM.active = false
-                    ANIM.valid = false
-                    ANIM.start = 0
-                    ANIM.pos.x = -1
-                    ANIM.pos.y = -1
+                    ANIM = {}
+                    ANIM.pos = -1
                     MOVE_PATH = {}
                     if !UPDATE_HOVER {
                         SELECTED_CELL = -1
@@ -353,15 +350,23 @@ main :: proc() {
                     if ANIM.valid {
                         apply_action(&GAME, Action{ type = .Attack, pos = ANIM.pos }) or_break
                     }
-                    ANIM.active = false
-                    ANIM.valid = false
-                    ANIM.start = 0
-                    ANIM.pos.x = { -1, -1 }
-                    ANIM.pos.y = { -1, -1 }
+                    ANIM = {}
+                    ANIM.pos = -1
                     ATTACK_FIREBALL_POS = {}
                 }
                 // }}}
             case .Spell: panic("TODO")
+            case .Skip:
+                // {{{
+                ANIM.valid = true
+                t := math.unlerp(ANIM.start, ANIM.start+ANIM.duration, get_time())
+                if ANIM.valid && t >= 0 && t <= 1 {
+                } else {
+                    if ANIM.valid { apply_action(&GAME, Action{ type = .Skip }) or_break }
+                    ANIM = {}
+                    ANIM.pos = -1
+                }
+                // }}}
             case .None: panic("How?")
             }
         }
@@ -393,7 +398,7 @@ main :: proc() {
         key := rl.GetKeyPressed()
         switch {
         case key == .F1: VIEW_TARGET = .Menu
-        case key == .F2 && !(ANIM.active && ANIM.valid):
+        case key == .F2 && !ANIM.active:
             GAME.board = new_board()
             MOVE_PATH = {}
             SELECTED_CELL = -1
@@ -408,7 +413,7 @@ main :: proc() {
                 c2 := [3]f32{ f32(t2.r) / 255.0, f32(t2.g) / 255.0, f32(t2.b) / 255.0 }
                 rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "bg_color_2"), raw_data(c2[:]), .VEC3)
             }
-        case key == .F5 && !(ANIM.active && ANIM.valid): execute_ai()
+        case key == .F5 && !ANIM.active: execute_ai()
         case key == .F6: if rl.IsCursorHidden() { rl.EnableCursor() } else { rl.DisableCursor() }
 
         case key == .ONE:   start_animation(.Spell, 1000, {}, Spell.FS)
@@ -417,6 +422,8 @@ main :: proc() {
         case key == .FOUR:  start_animation(.Spell, 1000, {}, Spell.DT)
         case key == .FIVE:  start_animation(.Spell, 1000, {}, Spell.MS)
         }
+
+        if GAME_MODE == .Singleplayer && GAME.turn&1 == 1 { execute_ai() }
 
         if VIEW_TARGET == .Game && !ANIM.active && !ANIM.valid && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
             unselect_active := true
@@ -427,7 +434,7 @@ main :: proc() {
                 get_player(SELECTED_CELL) == get_player(HOVERING_CELL) {
                     path, found := get_path(GAME.board, { SELECTED_CELL, HOVERING_CELL })
                     if found {
-                        start_animation(.Move, 500 + 100 * f32(get_path_length(path[:])), { SELECTED_CELL, HOVERING_CELL }, .None)
+                        start_animation(.Move, 500 + 100 * f32(get_path_length(path[:])), { SELECTED_CELL, HOVERING_CELL })
                         MOVE_PATH = path
                     }
                 }
@@ -439,7 +446,7 @@ main :: proc() {
                         SELECTED_CELL = HOVERING_CELL
                         unselect_active = false
                     } else {
-                        start_animation(.Attack, 1000, { SELECTED_CELL, HOVERING_CELL }, .None)
+                        start_animation(.Attack, 1000, { SELECTED_CELL, HOVERING_CELL })
                     }
                 }
             }

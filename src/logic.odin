@@ -66,6 +66,7 @@ cell_info :: proc(pos: [2]int, expected_type: CellType) -> (data: Elemental, aab
 }
 
 apply_action :: proc(game: ^Game, action: Action) -> (ok: bool) {
+    // {{{
     a := action
     switch a.type {
     case .Move:
@@ -87,24 +88,24 @@ apply_action :: proc(game: ^Game, action: Action) -> (ok: bool) {
         cell_A := &game.board.cells[a.pos.x.x][a.pos.x.y]
         cell_B := &game.board.cells[a.pos.y.x][a.pos.y.y]
 
-        data_A, aabb_A := cell_info(ANIM.pos.x, .Elemental) or_return
-        data_B, aabb_B := cell_info(ANIM.pos.y, .Elemental) or_return
+        data_A, aabb_A := cell_info(a.pos.x, .Elemental) or_return
+        data_B, aabb_B := cell_info(a.pos.y, .Elemental) or_return
 
         cell_B.data.health = math.clamp(data_B.health - DAMAGE_LEVEL[data_A.level], 0, HEALTH_LEVEL[data_B.level])
         if cell_B.data.health == 0 {
             cell_B.data.level -= 1
             if cell_B.data.level == 0 {
-                GAME.board.cells[ANIM.pos.y.x][ANIM.pos.y.y] = Cell{ type = .Empty }
+                GAME.board.cells[a.pos.y.x][a.pos.y.y] = Cell{ type = .Empty }
             } else {
-                cell_B.data.health = HEALTH_LEVEL[data_B.level]
-                cell_B.aabb.size = get_cell_size(data_B.level)
+                cell_B.data.health = HEALTH_LEVEL[cell_B.data.level]
+                cell_B.aabb.size = get_cell_size(cell_B.data.level)
             }
         }
         SELECTED_CELL = {-1,-1}
-        apply_action(game, Action{ type = .Skip })
+        start_animation(.Skip, 300)
     case .Spell:
         game.used_spell  = true
-        apply_action(game, Action{ type = .Skip })
+        start_animation(.Skip, 300)
     case .Skip:
         game.turn += 1
         game.used_spell  = false
@@ -116,6 +117,7 @@ apply_action :: proc(game: ^Game, action: Action) -> (ok: bool) {
 
     ok = true
     return
+    // }}}
 }
 
 Direction :: enum byte { I, N, E, S, W }
@@ -284,14 +286,9 @@ get_random_action :: proc(game: Game, type: ActionType) -> (act: Action, ok: boo
             }
         }
         return {}, false
-    case .Spell:
-        act = Action{ type = .Skip }
-        return act, true
-    case .Skip:
-        act = Action{ type = .Skip }
-        return act, true
-    case .None:
-        return {}, false
+    case .Spell: fallthrough
+    case .Skip: return Action{ type = .Skip }, true
+    case .None: return {}, false
     }
     return {}, false
     // }}}
@@ -301,7 +298,7 @@ get_elementals_in_attack_range :: proc(board: Board) -> [dynamic][2]int {
     return {}
 }
 
-start_animation :: proc(type: AnimationType, duration: f32, pos: [2][2]int, spell: Spell) {
+start_animation :: proc(type: AnimationType, duration: f32, pos: [2][2]int = {}, spell: Spell = .None) {
     ANIM = {
         active = true,
         type = type,
@@ -314,6 +311,8 @@ start_animation :: proc(type: AnimationType, duration: f32, pos: [2][2]int, spel
 
 execute_ai :: proc() {
     // {{{
+    if ANIM.active { return }
+
     act_types : [dynamic]ActionType; defer delete(act_types)
     used := [?]bool{GAME.used_spell, GAME.used_move, GAME.used_attack}
     b := [?]bool{false, true}
@@ -324,27 +323,23 @@ execute_ai :: proc() {
 
     act_type := len(act_types) == 0 ? ActionType.Skip : rand.choice(act_types[:])
     act, ok_gen := get_random_action(GAME, act_type)
+    if !ok_gen { act = Action{ type = .Skip } }
     fmt.println(ok_gen, act)
-    if ok_gen {
-        switch act.type {
-        case .Move:
-            path, found := get_path(GAME.board, act.pos)
-            if found {
-                start_animation(.Move, 500 + 100 * f32(get_path_length(path[:])), act.pos, .None)
-                MOVE_PATH = path
-                SELECTED_CELL = act.pos.x
-                HOVERING_CELL = act.pos.y
-                UPDATE_HOVER = false
-            }
-        case .Attack:
-            start_animation(.Attack, 1000, act.pos, .None)
-        case .Spell:
-            apply_action(&GAME, Action{ type = .Skip })
-        case .Skip:
-            apply_action(&GAME, Action{ type = .Skip })
-        case .None:
-            panic("How?")
+
+    switch act.type {
+    case .Move:
+        path, found := get_path(GAME.board, act.pos)
+        if found {
+            start_animation(.Move, 500 + 100 * f32(get_path_length(path[:])), act.pos)
+            MOVE_PATH = path
+            SELECTED_CELL = act.pos.x
+            HOVERING_CELL = act.pos.y
+            UPDATE_HOVER = false
         }
+    case .Attack: start_animation(.Attack, 1000, act.pos)
+    case .Spell: fallthrough
+    case .Skip: start_animation(.Skip, 300)
+    case .None: panic("How?")
     }
     // }}}
 }
