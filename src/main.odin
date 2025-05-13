@@ -136,6 +136,11 @@ ANIM := Animation {
 MOVE_PATH : [144]Direction
 ATTACK_FIREBALL_POS : Vec3
 ATTACK_FIREBALL_COLOR : [2]Color
+TURN_COLOR_BLUE  :: [4]f32{ 0, 0, 1, 1 }
+TURN_COLOR_GREEN :: [4]f32{ 0, 1, 0, 1 }
+TURN_COLOR : Color = rl.ColorFromNormalized(TURN_COLOR_BLUE)
+
+ATTACK_SOUND : rl.Sound
 // }}}
 
 /*
@@ -177,6 +182,21 @@ main :: proc() {
     defer rl.CloseWindow()
     rl.SetTargetFPS(TARGET_FPS)
 
+    // {{{ Audio
+    rl.InitAudioDevice()
+    defer rl.CloseAudioDevice()
+
+    rl.SetMasterVolume(0.1)
+
+    bg_music := rl.LoadMusicStream("src/resources/background_music.mp3")
+    defer rl.UnloadMusicStream(bg_music)
+
+    ATTACK_SOUND = rl.LoadSound("src/resources/attack.mp3")
+    defer rl.UnloadSound(ATTACK_SOUND)
+
+    rl.PlayMusicStream(bg_music)
+    // }}}
+
     CAMERA.position = { -6, CAM_HEIGHT, -6 }
     CAMERA.target = { 0, 0, 0 }
     CAMERA.up = { 0, 1, 0 }
@@ -184,6 +204,7 @@ main :: proc() {
     CAMERA.projection = .ORTHOGRAPHIC
 
     when ENABLED_SHADERS {
+        // {{{
         SHADER = rl.LoadShaderFromMemory(VERTEX_SHADER, FRAGMENT_SHADER)
         defer rl.UnloadShader(SHADER)
         SHADER.locs[rl.ShaderLocationIndex.VECTOR_VIEW] = rl.GetShaderLocation(SHADER, "viewPos");
@@ -207,9 +228,11 @@ main :: proc() {
             render_state = 1
         }
         rl.SetShaderValue(SHADER, rl.GetShaderLocation(SHADER, "render_state"), &render_state, .INT)
+        // }}}
     }
 
     when ENABLED_VR {
+        // {{{
         // from https://www.raylib.com/examples/core/loader.html?name=core_vr_simulator
         // VR device parameters definition
         device := rl.VrDeviceInfo {
@@ -257,7 +280,9 @@ main :: proc() {
         destRec   := rl.Rectangle{ 0.0, 0.0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()) }
 
         rl.HideCursor()
+        // }}}
     }
+
 
     GAME.board = new_board()
     // }}}
@@ -265,6 +290,10 @@ main :: proc() {
     // {{{ The Game Loop
     quit := false
     for !rl.WindowShouldClose() && !quit {
+        // {{{ Audio
+        rl.UpdateMusicStream(bg_music)
+        // }}}
+
         // {{{ Collision Calculation
         COLLISION = rl.RayCollision{ distance = math.F32_MAX }
         if VIEW_TARGET == .Game {
@@ -318,9 +347,7 @@ main :: proc() {
                     t_pos := get_path_pos(MOVE_PATH[:], aabb_A.pos, aabb_B.pos, t)
                     cell_A.aabb.pos = t_pos
                 } else {
-                    if ANIM.valid {
-                        apply_action(&GAME, Action{ type = .Move, pos = ANIM.pos }) or_break
-                    }
+                    if ANIM.valid { apply_action(&GAME, { type = .Move, pos = ANIM.pos }) }
                     ANIM = {}
                     ANIM.pos = -1
                     MOVE_PATH = {}
@@ -343,26 +370,31 @@ main :: proc() {
                 ATTACK_FIREBALL_COLOR = ElementColor[data_A.type]
 
                 t := math.unlerp(ANIM.start, ANIM.start+ANIM.duration, get_time())
-                if ANIM.valid && t >= 0 && t <= 1 {
+                if t >= 0 && t <= 1 {
                     ATTACK_FIREBALL_POS = math.lerp(aabb_A.pos, aabb_B.pos, t)
                     ATTACK_FIREBALL_POS.y = math.sqrt(linalg.length(aabb_A.pos.xz - aabb_B.pos.xz)) * (-4 * t * t + 4 * t)
                 } else {
-                    if ANIM.valid {
-                        apply_action(&GAME, Action{ type = .Attack, pos = ANIM.pos }) or_break
+                    ok := apply_action(&GAME, { type = .Attack, pos = ANIM.pos })
+                    if !ok {
+                        ANIM = {}
+                        ANIM.pos = -1
+                        fmt.println("Failed attack")
                     }
-                    ANIM = {}
-                    ANIM.pos = -1
+                    // no ANIM reset, as the apply_attack will set ANIM to skip
                     ATTACK_FIREBALL_POS = {}
                 }
                 // }}}
             case .Spell: panic("TODO")
             case .Skip:
                 // {{{
+                color_p1 := (GAME.turn&1 == 0) ? TURN_COLOR_BLUE : TURN_COLOR_GREEN
+                color_p2 := (GAME.turn&1 == 1) ? TURN_COLOR_BLUE : TURN_COLOR_GREEN
                 ANIM.valid = true
                 t := math.unlerp(ANIM.start, ANIM.start+ANIM.duration, get_time())
                 if ANIM.valid && t >= 0 && t <= 1 {
+                    TURN_COLOR = rl.ColorFromNormalized(math.lerp(color_p1, color_p2, math.sqrt(t)))
                 } else {
-                    if ANIM.valid { apply_action(&GAME, Action{ type = .Skip }) or_break }
+                    if ANIM.valid { apply_action(&GAME, { type = .Skip }) }
                     ANIM = {}
                     ANIM.pos = -1
                 }
@@ -416,11 +448,11 @@ main :: proc() {
         case key == .F5 && !ANIM.active: execute_ai()
         case key == .F6: if rl.IsCursorHidden() { rl.EnableCursor() } else { rl.DisableCursor() }
 
-        case key == .ONE:   start_animation(.Spell, 1000, {}, Spell.FS)
-        case key == .TWO:   start_animation(.Spell, 1000, {}, Spell.HV)
-        case key == .THREE: start_animation(.Spell, 1000, {}, Spell.AF)
-        case key == .FOUR:  start_animation(.Spell, 1000, {}, Spell.DT)
-        case key == .FIVE:  start_animation(.Spell, 1000, {}, Spell.MS)
+        case key == .ONE:   start_animation(.Spell, {}, Spell.FS)
+        case key == .TWO:   start_animation(.Spell, {}, Spell.HV)
+        case key == .THREE: start_animation(.Spell, {}, Spell.AF)
+        case key == .FOUR:  start_animation(.Spell, {}, Spell.DT)
+        case key == .FIVE:  start_animation(.Spell, {}, Spell.MS)
         }
 
         if GAME_MODE == .Singleplayer && GAME.turn&1 == 1 { execute_ai() }
@@ -434,8 +466,8 @@ main :: proc() {
                 get_player(SELECTED_CELL) == get_player(HOVERING_CELL) {
                     path, found := get_path(GAME.board, { SELECTED_CELL, HOVERING_CELL })
                     if found {
-                        start_animation(.Move, 500 + 100 * f32(get_path_length(path[:])), { SELECTED_CELL, HOVERING_CELL })
                         MOVE_PATH = path
+                        start_animation(.Move, { SELECTED_CELL, HOVERING_CELL })
                     }
                 }
                 // Attack - Self-Enemy
@@ -446,7 +478,9 @@ main :: proc() {
                         SELECTED_CELL = HOVERING_CELL
                         unselect_active = false
                     } else {
-                        start_animation(.Attack, 1000, { SELECTED_CELL, HOVERING_CELL })
+                        if is_attackable(SELECTED_CELL, HOVERING_CELL) {
+                            start_animation(.Attack, { SELECTED_CELL, HOVERING_CELL })
+                        }
                     }
                 }
             }
@@ -494,7 +528,8 @@ main :: proc() {
             }
         } else { debug_info = fmt.tprintf("%v\n", debug_info) }
         if DRAW_BOARD {
-            debug_info = fmt.tprintf("%v\nGAME.turn: %v | GAME.players: %v", debug_info, GAME.turn, GAME.players)
+            used := [?]bool{GAME.used_spell, GAME.used_move, GAME.used_attack}
+            debug_info = fmt.tprintf("%v\nGAME: turn: %v | used: %v | players: %v", debug_info, GAME.turn, used, GAME.players)
             debug_info = fmt.tprintf("%v\n%v - %#v", debug_info, ANIM, MOVE_PATH[:get_path_length(MOVE_PATH[:])])
         } else { debug_info = fmt.tprintf("%v\n", debug_info) }
         // }}}
@@ -553,10 +588,11 @@ main :: proc() {
                         rl.DrawSphere(ATTACK_FIREBALL_POS, 0.15, c[0])
                         rl.DrawSphere(ATTACK_FIREBALL_POS, 0.25, { c[1].r, c[1].g, c[1].b, 127 })
                     }
+                    rl.DrawCubeV({  6, 0,  6 }, 0.2, TURN_COLOR)
+                    rl.DrawCubeV({ -6, 0,  6 }, 0.2, TURN_COLOR)
+                    rl.DrawCubeV({  6, 0, -6 }, 0.2, TURN_COLOR)
+                    rl.DrawCubeV({ -6, 0, -6 }, 0.2, TURN_COLOR)
                 }
-                // when ENABLED_VR {
-                //     rl.DrawSphere(CAMERA.position + rl.GetCameraForward(&CAMERA) * 1, 0.01, WHITE)
-                // }
             }; rl.EndMode3D()
         }
         switch VIEW_TARGET {
@@ -593,9 +629,9 @@ main :: proc() {
                     defer delete(cstr)
                     rl.DrawText(cstr, 20, 20, 20, rl.RAYWHITE)
                 }
-            }
             rl.DrawFPS(0,0)
-        }; rl.EndDrawing()
+            }; rl.EndDrawing()
+        }
         case .Menu: {
             if rl.IsCursorHidden() { rl.EnableCursor() }
             rl.BeginDrawing(); {

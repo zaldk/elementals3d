@@ -84,12 +84,15 @@ apply_action :: proc(game: ^Game, action: Action) -> (ok: bool) {
         cell_A^ = Cell{ type = .Empty }
         SELECTED_CELL = a.pos.y
         game.used_move = true
+        ok = true
     case .Attack:
         cell_A := &game.board.cells[a.pos.x.x][a.pos.x.y]
         cell_B := &game.board.cells[a.pos.y.x][a.pos.y.y]
 
         data_A, aabb_A := cell_info(a.pos.x, .Elemental) or_return
         data_B, aabb_B := cell_info(a.pos.y, .Elemental) or_return
+
+        is_attackable(a.pos.x, a.pos.y) or_return
 
         cell_B.data.health = math.clamp(data_B.health - DAMAGE_LEVEL[data_A.level], 0, HEALTH_LEVEL[data_B.level])
         if cell_B.data.health == 0 {
@@ -101,21 +104,24 @@ apply_action :: proc(game: ^Game, action: Action) -> (ok: bool) {
                 cell_B.aabb.size = get_cell_size(cell_B.data.level)
             }
         }
+        game.used_attack = true
         SELECTED_CELL = {-1,-1}
-        start_animation(.Skip, 300)
+        start_animation(.Skip)
+        ok = true
     case .Spell:
-        game.used_spell  = true
-        start_animation(.Skip, 300)
+        game.used_spell = true
+        start_animation(.Skip)
+        ok = true
     case .Skip:
         game.turn += 1
         game.used_spell  = false
         game.used_move   = false
         game.used_attack = false
+        ok = true
     case .None:
         panic("How?")
     }
 
-    ok = true
     return
     // }}}
 }
@@ -254,9 +260,7 @@ get_random_action :: proc(game: Game, type: ActionType) -> (act: Action, ok: boo
         rand.shuffle(elem_enemy[:])
         for s in elem_self {
             for e in elem_enemy {
-                if math.abs(s.x - e.x) > 1 { continue } // outside X range
-                s_level := game.board.cells[s.x][s.y].data.level
-                if math.abs(s.y - e.y) > REACH_LEVEL[s_level] { continue } // outside Y range
+                if !is_attackable(s, e) { continue }
                 act.type = .Attack
                 act.pos = { s, e }
                 return act, true
@@ -298,7 +302,15 @@ get_elementals_in_attack_range :: proc(board: Board) -> [dynamic][2]int {
     return {}
 }
 
-start_animation :: proc(type: AnimationType, duration: f32, pos: [2][2]int = {}, spell: Spell = .None) {
+start_animation :: proc(type: AnimationType, pos: [2][2]int = {}, spell: Spell = .None) {
+    duration : f32
+    switch type {
+    case .None:   return
+    case .Move:   duration = 500 + 100 * f32(get_path_length(MOVE_PATH[:]))
+    case .Attack: duration = 1000; rl.PlaySound(ATTACK_SOUND)
+    case .Spell:  duration = 100
+    case .Skip:   duration = 500
+    }
     ANIM = {
         active = true,
         type = type,
@@ -316,9 +328,9 @@ execute_ai :: proc() {
     act_types : [dynamic]ActionType; defer delete(act_types)
     used := [?]bool{GAME.used_spell, GAME.used_move, GAME.used_attack}
     b := [?]bool{false, true}
-    if used == b.xxx { append(&act_types, ActionType.Attack, ActionType.Move, ActionType.Spell) }
-    if used == b.xyx { append(&act_types, ActionType.Attack) }
+    if used == b.xxx { append(&act_types, ActionType.Attack, ActionType.Move) }//, ActionType.Spell) }
     if used == b.yxx { append(&act_types, ActionType.Attack, ActionType.Move) }
+    if used == b.xyx { append(&act_types, ActionType.Attack) }
     if used == b.yyx { append(&act_types, ActionType.Attack) }
 
     act_type := len(act_types) == 0 ? ActionType.Skip : rand.choice(act_types[:])
@@ -330,16 +342,24 @@ execute_ai :: proc() {
     case .Move:
         path, found := get_path(GAME.board, act.pos)
         if found {
-            start_animation(.Move, 500 + 100 * f32(get_path_length(path[:])), act.pos)
             MOVE_PATH = path
             SELECTED_CELL = act.pos.x
             HOVERING_CELL = act.pos.y
             UPDATE_HOVER = false
+            start_animation(.Move, act.pos)
         }
-    case .Attack: start_animation(.Attack, 1000, act.pos)
+    case .Attack: start_animation(.Attack, act.pos)
     case .Spell: fallthrough
-    case .Skip: start_animation(.Skip, 300)
+    case .Skip: start_animation(.Skip)
     case .None: panic("How?")
     }
     // }}}
+}
+
+is_attackable :: proc(from, to: [2]int) -> bool {
+    if math.abs(from.x - to.x) > 1 { return false } // outside X range
+    from_level := GAME.board.cells[from.x][from.y].data.level
+    if from_level == 0 { return false }
+    if math.abs(from.y - to.y) > REACH_LEVEL[from_level] { return false } // outside Y range
+    return true
 }
