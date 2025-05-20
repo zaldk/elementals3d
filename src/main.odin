@@ -53,6 +53,7 @@ VIEW_TARGET : ViewTarget = .Menu
 
 GameMode :: enum { None, Singleplayer, Multiplayer }
 GAME_MODE := GameMode.Singleplayer
+GAME_PLAYER_ID := read_player_id()
 
 Box :: struct {
     pos: Vec3,
@@ -283,8 +284,15 @@ main :: proc() {
         // }}}
     }
 
-
     GAME.board = new_board()
+    if GAME_MODE == .Multiplayer {
+        if GAME_PLAYER_ID == 0 {
+            write_board(GAME.board)
+        } else {
+            board, ok := read_board()
+            if ok { GAME.board = board }
+        }
+    }
     // }}}
 
     // {{{ The Game Loop
@@ -342,12 +350,13 @@ main :: proc() {
                 ANIM.valid = true
 
                 t := math.unlerp(ANIM.start, ANIM.start+ANIM.duration, get_time())
-                if ANIM.valid && t >= 0 && t <= 1 {
+                if t >= 0 && t <= 1 {
                     t = ease.sine_in_out(t)
                     t_pos := get_path_pos(MOVE_PATH[:], aabb_A.pos, aabb_B.pos, t)
                     cell_A.aabb.pos = t_pos
                 } else {
-                    if ANIM.valid { apply_action(&GAME, { type = .Move, pos = ANIM.pos }) }
+                    apply_action(&GAME, { type = .Move, pos = ANIM.pos })
+                    if GAME_MODE == .Multiplayer { write_action({ type = .Move, pos = ANIM.pos }) }
                     ANIM = {}
                     ANIM.pos = -1
                     MOVE_PATH = {}
@@ -379,6 +388,8 @@ main :: proc() {
                         ANIM = {}
                         ANIM.pos = -1
                         fmt.println("Failed attack")
+                    } else {
+                        if GAME_MODE == .Multiplayer { write_action({ type = .Attack, pos = ANIM.pos }) }
                     }
                     // no ANIM reset, as the apply_attack will set ANIM to skip
                     ATTACK_FIREBALL_POS = {}
@@ -391,16 +402,55 @@ main :: proc() {
                 color_p2 := (GAME.turn&1 == 1) ? TURN_COLOR_BLUE : TURN_COLOR_GREEN
                 ANIM.valid = true
                 t := math.unlerp(ANIM.start, ANIM.start+ANIM.duration, get_time())
-                if ANIM.valid && t >= 0 && t <= 1 {
+                if t >= 0 && t <= 1 {
                     TURN_COLOR = rl.ColorFromNormalized(math.lerp(color_p1, color_p2, math.sqrt(t)))
                 } else {
-                    if ANIM.valid { apply_action(&GAME, { type = .Skip }) }
+                    apply_action(&GAME, { type = .Skip })
+                    if GAME_MODE == .Multiplayer { write_action({ type = .Skip }) }
                     ANIM = {}
                     ANIM.pos = -1
                 }
                 // }}}
             case .None: panic("How?")
             }
+        }
+        // }}}
+
+        // {{{ Turn logic
+        skip_input := false
+        if  GAME_MODE == .Singleplayer && GAME.turn&1 == 1 && !ANIM.active { execute_ai() }
+        for GAME_MODE == .Multiplayer  && GAME.turn&1 == 1-GAME_PLAYER_ID && !ANIM.active {
+            if is_socket_empty(SOCK_ACTION) {
+                skip_input = true
+                break
+            }
+
+            act, ok := read_action()
+            if !ok {
+                skip_input = true
+                break
+            }
+
+            fmt.println("Found this action:", act)
+
+            switch act.type {
+            case .Move:
+                path, found := get_path(GAME.board, act.pos)
+                if found {
+                    MOVE_PATH = path
+                    SELECTED_CELL = act.pos.x
+                    HOVERING_CELL = act.pos.y
+                    UPDATE_HOVER = false
+                    start_animation(.Move, act.pos)
+                }
+            case .Attack: start_animation(.Attack, act.pos)
+            case .Spell: fallthrough
+            case .Skip: start_animation(.Skip)
+            case .None: skip_input = true
+            }
+
+            clear_socket(SOCK_ACTION)
+            break
         }
         // }}}
 
@@ -447,6 +497,8 @@ main :: proc() {
             }
         case key == .F5 && !ANIM.active: execute_ai()
         case key == .F6: if rl.IsCursorHidden() { rl.EnableCursor() } else { rl.DisableCursor() }
+        // case key == .F7: fmt.println(write_socket({ .Move, {{69, 58008},{420, 1337}}, .None }))
+        // case key == .F8: fmt.println(read_socket())
 
         case key == .ONE:   start_animation(.Spell, {}, Spell.FS)
         case key == .TWO:   start_animation(.Spell, {}, Spell.HV)
@@ -454,8 +506,6 @@ main :: proc() {
         case key == .FOUR:  start_animation(.Spell, {}, Spell.DT)
         case key == .FIVE:  start_animation(.Spell, {}, Spell.MS)
         }
-
-        if GAME_MODE == .Singleplayer && GAME.turn&1 == 1 { execute_ai() }
 
         if VIEW_TARGET == .Game && !ANIM.active && !ANIM.valid && rl.IsMouseButtonPressed(.LEFT) && COLLISION.hit {
             unselect_active := true
@@ -490,7 +540,11 @@ main :: proc() {
                     SELECTED_CELL = {-1,-1} // double-click == unselect
                     MOVE_PATH = {}
                 } else {
-                    if get_player(HOVERING_CELL) == PlayerType(1+(GAME.turn&1)) {
+                    this_player := GAME.turn&1
+                    if GAME_MODE == .Multiplayer {
+                        this_player = GAME_PLAYER_ID == 0 ? this_player : 1 - this_player
+                    }
+                    if get_player(HOVERING_CELL) == PlayerType(this_player + 1) {
                         SELECTED_CELL = HOVERING_CELL
                     }
                 }
@@ -518,7 +572,7 @@ main :: proc() {
             } else {
                 debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].type)
             }
-        } else { debug_info = fmt.tprintf("%v\n", debug_info) }
+        }
         if DRAW_BOARD && valid(HOVERING_CELL) {
             debug_info = fmt.tprintf("%v\nHovering: %v", debug_info, HOVERING_CELL)
             if GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
@@ -526,12 +580,14 @@ main :: proc() {
             } else {
                 debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type)
             }
-        } else { debug_info = fmt.tprintf("%v\n", debug_info) }
+        }
         if DRAW_BOARD {
             used := [?]bool{GAME.used_spell, GAME.used_move, GAME.used_attack}
             debug_info = fmt.tprintf("%v\nGAME: turn: %v | used: %v | players: %v", debug_info, GAME.turn, used, GAME.players)
             debug_info = fmt.tprintf("%v\n%v - %#v", debug_info, ANIM, MOVE_PATH[:get_path_length(MOVE_PATH[:])])
-        } else { debug_info = fmt.tprintf("%v\n", debug_info) }
+            debug_info = fmt.tprintf("%v\n skip_input: %v", debug_info, skip_input)
+            debug_info = fmt.tprintf("%v\n GAME_PLAYER_ID: %v", debug_info, GAME_PLAYER_ID)
+        }
         // }}}
 
         // {{{ SHADERS are awesome
@@ -704,5 +760,9 @@ main :: proc() {
         defer free_all(context.temp_allocator)
     }
     // }}}
+
+    clear_socket(SOCK_ACTION)
+    clear_socket(SOCK_BOARD)
+    write_player_id(0)
     // }}}
 }

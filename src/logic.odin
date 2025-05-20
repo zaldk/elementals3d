@@ -1,5 +1,7 @@
 package elementals
 
+import "core:os"
+import "core:encoding/json"
 import "core:fmt"
 import "core:slice"
 import "core:math"
@@ -336,7 +338,7 @@ execute_ai :: proc() {
     act_type := len(act_types) == 0 ? ActionType.Skip : rand.choice(act_types[:])
     act, ok_gen := get_random_action(GAME, act_type)
     if !ok_gen { act = Action{ type = .Skip } }
-    fmt.println(ok_gen, act)
+    // fmt.println(ok_gen, act)
 
     switch act.type {
     case .Move:
@@ -361,5 +363,122 @@ is_attackable :: proc(from, to: [2]int) -> bool {
     from_level := GAME.board.cells[from.x][from.y].data.level
     if from_level == 0 { return false }
     if math.abs(from.y - to.y) > REACH_LEVEL[from_level] { return false } // outside Y range
+    return true
+}
+
+SOCK_ACTION    :: ".net/action"
+SOCK_PLAYER_ID :: ".net/player_id"
+SOCK_BOARD     :: ".net/board"
+
+is_socket_empty :: proc(path: string) -> bool {
+    return os.file_size_from_path(path) <= 0
+}
+
+clear_socket :: proc(path: string) -> bool {
+    werr := os.write_entire_file_or_err(path, {})
+    if werr != nil {
+        fmt.eprintfln("Unable to write file: %v", werr)
+        return false
+    }
+    return true
+}
+
+read_action :: proc() -> (Action, bool) {
+    data, ok := os.read_entire_file_from_filename(SOCK_ACTION)
+    if !ok {
+        fmt.eprintln("Failed to load the file!")
+        return {}, false
+    }
+    defer delete(data) // Free the memory at the end
+
+    // Load data from the json bytes directly to the struct
+    action: Action
+    unmarshal_err := json.unmarshal(data, &action)
+    if unmarshal_err != nil {
+        fmt.eprintln("Failed to unmarshal the file!")
+        return {}, false
+    }
+
+    return action, true
+}
+
+write_action :: proc(action: Action) -> bool {
+    json_data, err := json.marshal(action)
+    if err != nil {
+        fmt.eprintfln("Unable to marshal JSON: %v", err)
+        return false
+    }
+    defer delete(json_data)
+
+    werr := os.write_entire_file_or_err(SOCK_ACTION, json_data)
+    if werr != nil {
+        fmt.eprintfln("Unable to write file: %v", werr)
+        return false
+    }
+
+    return true
+}
+
+read_player_id :: proc() -> int {
+    data, ok := os.read_entire_file_from_filename(SOCK_PLAYER_ID)
+    if !ok {
+        fmt.eprintln("Failed to load the file!")
+        write_player_id(1)
+        return 0
+    }
+    defer delete(data)
+
+    content := string(data)
+    if content == "0" {
+        write_player_id(1)
+        return 0
+    } else {
+        write_player_id(0)
+        return 1
+    }
+}
+
+write_player_id :: proc(pid: int) -> bool {
+    werr := os.write_entire_file_or_err(SOCK_PLAYER_ID, {'0'+u8(pid)})
+    if werr != nil {
+        fmt.eprintfln("Unable to write file: %v", werr)
+        return false
+    }
+    return true
+}
+
+read_board :: proc() -> (Board, bool) {
+    data, ok := os.read_entire_file_from_filename(SOCK_BOARD)
+    if !ok {
+        fmt.eprintln("Failed to load the file!")
+        return {}, false
+    }
+    defer delete(data) // Free the memory at the end
+
+    // Load data from the json bytes directly to the struct
+    board: Board
+    unmarshal_err := json.unmarshal(data, &board)
+    if unmarshal_err != nil {
+        fmt.eprintln("Failed to unmarshal the file!")
+        return {}, false
+    }
+
+    return board, true
+}
+
+write_board :: proc(board: Board) -> bool {
+    json_data, err := json.marshal(board)
+    if err != nil {
+        fmt.eprintfln("Unable to marshal JSON: %v", err)
+        return false
+    }
+    defer delete(json_data)
+
+    werr := os.write_entire_file_or_err(SOCK_BOARD, json_data)
+    if werr != nil {
+        fmt.eprintfln("Unable to write file: %v", werr)
+        return false
+    }
+
     return true
 }
