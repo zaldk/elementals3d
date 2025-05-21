@@ -52,7 +52,7 @@ ViewTarget :: enum { None, Game, Menu, Conf }
 VIEW_TARGET : ViewTarget = .Menu
 
 GameMode :: enum { None, Singleplayer, Multiplayer }
-GAME_MODE := GameMode.Singleplayer
+GAME_MODE := GameMode.Multiplayer
 GAME_PLAYER_ID := read_player_id()
 
 Box :: struct {

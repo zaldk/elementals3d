@@ -391,6 +391,11 @@ read_action :: proc() -> (Action, bool) {
     }
     defer delete(data) // Free the memory at the end
 
+    // fmt.printfln("%#v", data[0])
+    // if GAME_PLAYER_ID == int('0' - data[0]) {
+    //     return {}, false
+    // }
+
     // Load data from the json bytes directly to the struct
     action: Action
     unmarshal_err := json.unmarshal(data, &action)
@@ -409,6 +414,11 @@ write_action :: proc(action: Action) -> bool {
         return false
     }
     defer delete(json_data)
+
+    // pid := [?]byte{byte(GAME_PLAYER_ID)}
+    // data_all := [?][]byte{pid[:], json_data}
+    // data, ok := slice.concatenate(data_all[:])
+    // defer delete(data)
 
     werr := os.write_entire_file_or_err(SOCK_ACTION, json_data)
     if werr != nil {
