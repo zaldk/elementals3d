@@ -25,7 +25,10 @@ draw_board :: proc(board: Board) {
             switch board.cells[i][j].type {
             case .Empty: continue
             case .Block: panic("\n\tTODO: implement Block rendering")
-            case .Elemental: draw_elemental(board.cells[i][j].aabb, board.cells[i][j].data)
+            case .Elemental:
+                data := board.cells[i][j].data
+                aabb := board.cells[i][j].aabb
+                draw_elemental(aabb, data)
             case .None: panic("How?")
             }
         }
@@ -37,8 +40,6 @@ draw_elemental :: proc(aabb: Box, data: Elemental) {
     // {{{
     BUMP : f32 : 0.05
     draw_cube(aabb, ElementColor[data.type][1])
-
-    // draw_health(aabb, data)
 
     dot : Box
     for i in 0..<data.level {
@@ -92,10 +93,24 @@ draw_all_elemental_wires :: proc(board: Board) {
 
 draw_all_healths :: proc(board: Board) {
     // {{{
+    damages : [12][12]int
+    if valid(SELECTED_CELL) && get_cell(board, SELECTED_CELL).type == .Elemental {
+        p := SELECTED_CELL
+        sc := get_cell(board, SELECTED_CELL)
+        dmg := DAMAGE_LEVEL[sc.data.level]
+        reach := REACH_LEVEL[sc.data.level]
+        for i in math.max(p.x-1, 0)..<math.min(p.x+2, 12) {
+            for j in 0..<12 {
+                if j/6 == p.y/6 { continue }
+                if math.abs(j - p.y) > reach { continue }
+                damages[i][j] = dmg
+            }
+        }
+    }
     for i in 0..<12 {
         for j in 0..<12 {
             if board.cells[i][j].type != .Elemental { continue }
-            draw_health(board.cells[i][j].aabb, board.cells[i][j].data)
+            draw_health(board.cells[i][j].aabb, board.cells[i][j].data, damages[i][j])
         }
     }
     // }}}
@@ -120,8 +135,8 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
         empty := i >= data.health
         damaged := i >= data.health-damage
 
-        draw_cube(hp, empty ? TW(.SLATE5) : damaged ? TW(.RED5) : TW(.YELLOW4))
-        // draw_cube_wires(hp, BLACK)
+        draw_cube(hp, empty ? TW(.SLATE5) : damaged ? TW(.RED7) : TW(.YELLOW4))
+        draw_cube_wires(hp, BLACK)
     }
     }
 
@@ -129,9 +144,22 @@ draw_health :: proc(aabb: Box, data: Elemental, damage: int = 0, _reverse := tru
     // }}}
 }
 
-highlight_cell :: proc(board: Board, pos: [2]int) {
-    // color := get_tile_color(pos.x, pos.y)
-    color := Color{255,255,255, 51}
+draw_attacked_tiles :: proc(board: Board, p: [2]int) {
+    if valid(p) && get_cell(board, p).type == .Elemental {
+        sc := get_cell(board, p)
+        dmg := DAMAGE_LEVEL[sc.data.level]
+        reach := REACH_LEVEL[sc.data.level]
+        for i in math.max(p.x-1, 0)..<math.min(p.x+2, 12) {
+            for j in 0..<12 {
+                if j/6 == p.y/6 { continue }
+                if math.abs(j - p.y) > reach { continue }
+                highlight_cell({i,j}, {255,0,0,51})
+            }
+        }
+    }
+}
+
+highlight_cell :: proc(pos: [2]int, color := Color{255,255,255,51}) {
     aabb := get_tile_aabb(pos.x, pos.y)
     aabb.size.y *= 1.1
     draw_cube(aabb, color)

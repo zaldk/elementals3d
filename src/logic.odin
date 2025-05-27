@@ -25,8 +25,8 @@ new_board :: proc() -> (board: Board) {
             switch {
             case r < 0.25:
                 type := rand.choice(elements[2*(j/6):][:num_elements])
-                level := rand.int_max(3) + 1
-                health := rand.int_max(HEALTH_LEVEL[level]) + 1
+                level := 1 //rand.int_max(3) + 1
+                health := HEALTH_LEVEL[level] //rand.int_max(HEALTH_LEVEL[level]) + 1
                 board.cells[i][j].data = Elemental{ type, level, health }
                 board.cells[i][j].type = .Elemental
                 board.cells[i][j].aabb = get_cell_aabb(i, j, level)
@@ -40,18 +40,60 @@ new_board :: proc() -> (board: Board) {
     // }}}
 }
 
-merge_board :: proc(board: ^Board) {
+merge_configurations := [8][3][2]int{
+    {{-1, -1}, {+0, -1}, {+1, -1}},
+    {{-1, +0}, {+0, +0}, {+1, +0}},
+    {{-1, +1}, {+0, +1}, {+1, +1}},
+    {{-1, -1}, {-1, +0}, {-1, +1}},
+    {{+0, -1}, {+0, +0}, {+0, +1}},
+    {{+1, -1}, {+1, +0}, {+1, +1}},
+    {{-1, -1}, {+0, +0}, {+1, +1}},
+    {{+1, -1}, {+0, +0}, {-1, +1}},
+}
+merge_board :: proc(board: ^Board, player: PlayerType) -> int {
     // {{{
-    merge_configurations := [8][3][2]int{
-        {{-1, -1}, {+0, -1}, {+1, -1}},
-        {{-1, +0}, {+0, +0}, {+1, +0}},
-        {{-1, +1}, {+0, +1}, {+1, +1}},
-        {{-1, -1}, {-1, +0}, {-1, +1}},
-        {{+0, -1}, {+0, +0}, {+0, +1}},
-        {{+1, -1}, {+1, +0}, {+1, +1}},
-        {{-1, -1}, {+0, +0}, {+1, +1}},
-        {{+1, -1}, {+0, +0}, {-1, +1}},
+    new_charges := 0
+    next := board^
+    todo := [12][6]byte{} // 0=nop << 1=remove << 2=ascend ; low_priority << high_priority
+    o := (int(player)-1) * 12 / 2
+
+    for row in 1..<11 {
+        for col in 1..<5 {
+            for i := 0; i < len(merge_configurations); i += 1 {
+                conf := merge_configurations[i]
+                a := board.cells[row+conf[0][1]][col+conf[0][0]+o]
+                b := board.cells[row+conf[1][1]][col+conf[1][0]+o]
+                c := board.cells[row+conf[2][1]][col+conf[2][0]+o]
+                if !(a.type == .Elemental && b.type == .Elemental && c.type == .Elemental &&
+                     a.data.type  == b.data.type  && b.data.type  == c.data.type  &&
+                     a.data.level == b.data.level && b.data.level == c.data.level &&
+                    (a.data.level == 1 || a.data.level == 2)) {
+                    continue
+                }
+                todo[row+conf[0][1]][col+conf[0][0]] |= 0b01
+                todo[row+conf[1][1]][col+conf[1][0]] |= 0b10
+                todo[row+conf[2][1]][col+conf[2][0]] |= 0b01
+            }
+        }
     }
+
+    for row in 0..<12 {
+        for col in 0..<6 {
+            switch todo[row][col] {
+            case 0b00: break
+            case 0b01: next.cells[row][col+o] = { type = .Empty }
+            case 0b10: fallthrough
+            case 0b11:
+                new_charges += next.cells[row][col+o].data.level
+                next.cells[row][col+o].data.level += 1
+                next.cells[row][col+o].aabb.size  = get_cell_size(next.cells[row][col+o].data.level)
+                next.cells[row][col+o].data.health = HEALTH_LEVEL[next.cells[row][col+o].data.level]
+            }
+        }
+    }
+
+    board^ = next
+    return new_charges
     // }}}
 }
 
@@ -107,7 +149,7 @@ apply_action :: proc(game: ^Game, action: Action) -> (ok: bool) {
             }
         }
         game.used_attack = true
-        SELECTED_CELL = {-1,-1}
+        SELECTED_CELL = -1
         start_animation(.Skip)
         ok = true
     case .Spell:
@@ -115,6 +157,8 @@ apply_action :: proc(game: ^Game, action: Action) -> (ok: bool) {
         start_animation(.Skip)
         ok = true
     case .Skip:
+        merge_board(&GAME.board, PlayerType(1+(GAME.turn&1)))
+        SELECTED_CELL = -1
         game.turn += 1
         game.used_spell  = false
         game.used_move   = false
@@ -250,10 +294,27 @@ get_random_action :: proc(game: Game, type: ActionType) -> (act: Action, ok: boo
     case .Attack:
         elem_self, elem_enemy : [dynamic][2]int
         defer delete(elem_self); defer delete(elem_enemy)
-        for i in 0..<12 {
-            for j in 0..<12 {
-                if game.board.cells[i][j].type == .Elemental {
-                    append(j/6 == (game.turn&1) ? &elem_self : &elem_enemy,  [2]int{i, j})
+        if !game.used_move {
+            for i in 0..<12 {
+                for j in 0..<12 {
+                    if game.board.cells[i][j].type == .Elemental {
+                        if game.turn&1 == j/6 {
+                            append(&elem_self,  [2]int{i, j})
+                        } else {
+                            append(&elem_enemy, [2]int{i, j})
+                        }
+                    }
+                }
+            }
+        } else {
+            if valid(SELECTED_CELL) {
+                append(&elem_self, SELECTED_CELL)
+            }
+            for i in 0..<12 {
+                for j in 0..<12 {
+                    if game.board.cells[i][j].type == .Elemental && game.turn&1 != j/6 {
+                        append(&elem_enemy, [2]int{i, j})
+                    }
                 }
             }
         }
@@ -323,6 +384,21 @@ start_animation :: proc(type: AnimationType, pos: [2][2]int = {}, spell: Spell =
     }
 }
 
+can_attack :: proc(board: Board, p: [2]int) -> bool {
+    if valid(p) && get_cell(board, p).type == .Elemental {
+        reach := REACH_LEVEL[get_cell(board, p).data.level]
+        for i in math.max(p.x-1, 0)..<math.min(p.x+2, 12) {
+            for j in 0..<12 {
+                if j/6 == p.y/6 { continue }
+                if math.abs(j - p.y) > reach { continue }
+                if board.cells[i][j].type != .Elemental { continue }
+                return true
+            }
+        }
+    }
+    return false
+}
+
 execute_ai :: proc() {
     // {{{
     if ANIM.active { return }
@@ -348,9 +424,13 @@ execute_ai :: proc() {
             SELECTED_CELL = act.pos.x
             HOVERING_CELL = act.pos.y
             UPDATE_HOVER = false
+            RESET_SELECTED = false
             start_animation(.Move, act.pos)
         }
-    case .Attack: start_animation(.Attack, act.pos)
+    case .Attack:
+        SELECTED_CELL = act.pos.x
+        HOVERING_CELL = act.pos.y
+        start_animation(.Attack, act.pos)
     case .Spell: fallthrough
     case .Skip: start_animation(.Skip)
     case .None: panic("How?")

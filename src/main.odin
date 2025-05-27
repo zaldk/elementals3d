@@ -19,8 +19,23 @@ TW :: tw.TW
 BLACK :: Color{0,0,0,255}
 WHITE :: Color{255,255,255,255}
 
+GameMode :: enum { None, Singleplayer, Multiplayer }
+MultiplayerMode :: enum { None, Local, Network }
+GAME_PLAYER_ID := 0
+SETTINGS := struct{
+    game_mode : GameMode,
+    multiplayer_mode : MultiplayerMode,
+    volume : f32,
+}{
+    game_mode = .Multiplayer,
+    multiplayer_mode = .Local,
+    volume = 0.0,
+}
+
 ENABLED_SHADERS :: #config(SHADERS, false)
 ENABLED_VR :: #config(VR, false)
+DEBUG_INFO :: true
+
 TARGET_FPS :: 120
 EPSILON :: 0.001
 HEALTH_LEVEL := [?]int{ -1, 1, 2, 6 }
@@ -36,6 +51,7 @@ COLLISION := rl.RayCollision{ distance = math.F32_MAX }
 SELECTED_CELL := [2]int{-1, -1}
 HOVERING_CELL := [2]int{-1, -1}
 UPDATE_HOVER := true
+RESET_SELECTED := true
 
 MAX_BOXES :: 1024
 // ALL_BOXES_INDEX := 0
@@ -50,10 +66,6 @@ DISTORTION_SHADER :: #load("resources/distortion.glsl", cstring)
 
 ViewTarget :: enum { None, Game, Menu, Conf }
 VIEW_TARGET : ViewTarget = .Menu
-
-GameMode :: enum { None, Singleplayer, Multiplayer }
-GAME_MODE := GameMode.Multiplayer
-GAME_PLAYER_ID := read_player_id()
 
 Box :: struct {
     pos: Vec3,
@@ -187,7 +199,7 @@ main :: proc() {
     rl.InitAudioDevice()
     defer rl.CloseAudioDevice()
 
-    rl.SetMasterVolume(0.1)
+    rl.SetMasterVolume(SETTINGS.volume)
 
     bg_music := rl.LoadMusicStream("src/resources/background_music.mp3")
     defer rl.UnloadMusicStream(bg_music)
@@ -196,6 +208,7 @@ main :: proc() {
     defer rl.UnloadSound(ATTACK_SOUND)
 
     rl.PlayMusicStream(bg_music)
+    // rl.PauseAudioStream(bg_music)
     // }}}
 
     CAMERA.position = { -6, CAM_HEIGHT, -6 }
@@ -223,8 +236,8 @@ main :: proc() {
 
         render_state := 0 // nothing
         render_state |= 1 // flat color
-        // render_state |= 2 // shadows
-        // render_state |= 4 // background
+        // render_state |= 2 // shadows // currently broken
+        render_state |= 4 // background
         when ENABLED_VR {
             render_state = 1
         }
@@ -285,7 +298,7 @@ main :: proc() {
     }
 
     GAME.board = new_board()
-    if GAME_MODE == .Multiplayer {
+    if SETTINGS.game_mode == .Multiplayer && SETTINGS.multiplayer_mode == .Network {
         if GAME_PLAYER_ID == 0 {
             write_board(GAME.board)
         } else {
@@ -356,13 +369,14 @@ main :: proc() {
                     cell_A.aabb.pos = t_pos
                 } else {
                     apply_action(&GAME, { type = .Move, pos = ANIM.pos })
-                    if GAME_MODE == .Multiplayer { write_action({ type = .Move, pos = ANIM.pos }) }
+                    if SETTINGS.game_mode == .Multiplayer { write_action({ type = .Move, pos = ANIM.pos }) }
                     ANIM = {}
                     ANIM.pos = -1
                     MOVE_PATH = {}
-                    if !UPDATE_HOVER {
+                    if !UPDATE_HOVER && RESET_SELECTED {
                         SELECTED_CELL = -1
                         HOVERING_CELL = -1
+                        RESET_SELECTED = true
                     }
                     UPDATE_HOVER = true
                 }
@@ -389,7 +403,7 @@ main :: proc() {
                         ANIM.pos = -1
                         fmt.println("Failed attack")
                     } else {
-                        if GAME_MODE == .Multiplayer { write_action({ type = .Attack, pos = ANIM.pos }) }
+                        if SETTINGS.game_mode == .Multiplayer { write_action({ type = .Attack, pos = ANIM.pos }) }
                     }
                     // no ANIM reset, as the apply_attack will set ANIM to skip
                     ATTACK_FIREBALL_POS = {}
@@ -406,7 +420,7 @@ main :: proc() {
                     TURN_COLOR = rl.ColorFromNormalized(math.lerp(color_p1, color_p2, math.sqrt(t)))
                 } else {
                     apply_action(&GAME, { type = .Skip })
-                    if GAME_MODE == .Multiplayer { write_action({ type = .Skip }) }
+                    if SETTINGS.game_mode == .Multiplayer { write_action({ type = .Skip }) }
                     ANIM = {}
                     ANIM.pos = -1
                 }
@@ -418,8 +432,21 @@ main :: proc() {
 
         // {{{ Turn logic
         skip_input := false
-        if  GAME_MODE == .Singleplayer && GAME.turn&1 == 1 && !ANIM.active { execute_ai() }
-        for GAME_MODE == .Multiplayer  && GAME.turn&1 == 1-GAME_PLAYER_ID && !ANIM.active {
+        if SETTINGS.game_mode == .Singleplayer && !ANIM.active {
+            if GAME.turn&1 == 1 {
+                execute_ai()
+            } else {
+                if valid(SELECTED_CELL) && GAME.used_move && !can_attack(GAME.board, SELECTED_CELL) {
+                    start_animation(.Skip)
+                }
+            }
+        }
+        if SETTINGS.game_mode == .Multiplayer && !ANIM.active && SETTINGS.multiplayer_mode == .Local {
+            if valid(SELECTED_CELL) && GAME.used_move && !can_attack(GAME.board, SELECTED_CELL) {
+                start_animation(.Skip)
+            }
+        }
+        for SETTINGS.game_mode == .Multiplayer && GAME.turn&1 == 1-GAME_PLAYER_ID && !ANIM.active && SETTINGS.multiplayer_mode == .Network {
             if is_socket_empty(SOCK_ACTION) {
                 skip_input = true
                 break
@@ -497,8 +524,9 @@ main :: proc() {
             }
         case key == .F5 && !ANIM.active: execute_ai()
         case key == .F6: if rl.IsCursorHidden() { rl.EnableCursor() } else { rl.DisableCursor() }
-        // case key == .F7: fmt.println(write_socket({ .Move, {{69, 58008},{420, 1337}}, .None }))
-        // case key == .F8: fmt.println(read_socket())
+        case key == .F7:
+            SETTINGS.volume = SETTINGS.volume == 0 ? 0.2 : 0
+            rl.SetMasterVolume(SETTINGS.volume)
 
         case key == .ONE:   start_animation(.Spell, {}, Spell.FS)
         case key == .TWO:   start_animation(.Spell, {}, Spell.HV)
@@ -511,9 +539,10 @@ main :: proc() {
             unselect_active := true
             if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
                 // Move - Self-Self
-                if get_cell(GAME.board, SELECTED_CELL).type == .Elemental &&
-                get_cell(GAME.board, HOVERING_CELL).type == .Empty &&
-                get_player(SELECTED_CELL) == get_player(HOVERING_CELL) {
+                if !GAME.used_move &&
+                  get_cell(GAME.board, SELECTED_CELL).type == .Elemental &&
+                  get_cell(GAME.board, HOVERING_CELL).type == .Empty &&
+                  get_player(SELECTED_CELL) == get_player(HOVERING_CELL) {
                     path, found := get_path(GAME.board, { SELECTED_CELL, HOVERING_CELL })
                     if found {
                         MOVE_PATH = path
@@ -522,8 +551,8 @@ main :: proc() {
                 }
                 // Attack - Self-Enemy
                 if get_cell(GAME.board, SELECTED_CELL).type == .Elemental &&
-                get_cell(GAME.board, HOVERING_CELL).type == .Elemental &&
-                get_player(SELECTED_CELL) != get_player(HOVERING_CELL) {
+                   get_cell(GAME.board, HOVERING_CELL).type == .Elemental &&
+                   get_player(SELECTED_CELL) != get_player(HOVERING_CELL) {
                     if SELECTED_CELL.y / 6 == HOVERING_CELL.y / 6 {
                         SELECTED_CELL = HOVERING_CELL
                         unselect_active = false
@@ -535,13 +564,13 @@ main :: proc() {
                 }
             }
 
-            if !ANIM.active && unselect_active {
+            if !ANIM.active && unselect_active && !GAME.used_move {
                 if equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
                     SELECTED_CELL = {-1,-1} // double-click == unselect
                     MOVE_PATH = {}
                 } else {
                     this_player := GAME.turn&1
-                    if GAME_MODE == .Multiplayer {
+                    if SETTINGS.game_mode == .Multiplayer {
                         this_player = GAME_PLAYER_ID == 0 ? this_player : 1 - this_player
                     }
                     if get_player(HOVERING_CELL) == PlayerType(this_player + 1) {
@@ -551,42 +580,48 @@ main :: proc() {
             }
         }
 
-        if VIEW_TARGET == .Game && !(ANIM.active && ANIM.valid) && COLLISION.hit {
-            if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
-                if get_cell(GAME.board, HOVERING_CELL).type == .Empty &&
-                   get_cell(GAME.board, SELECTED_CELL).type == .Elemental {
-                    path, found := get_path(GAME.board, { SELECTED_CELL, HOVERING_CELL })
-                    if found { MOVE_PATH = path } else { MOVE_PATH = {} }
+        if !GAME.used_move {
+            if VIEW_TARGET == .Game && !(ANIM.active && ANIM.valid) && COLLISION.hit {
+                if valid(SELECTED_CELL) && valid(HOVERING_CELL) && !equal(SELECTED_CELL[:], HOVERING_CELL[:]) {
+                    if get_cell(GAME.board, HOVERING_CELL).type == .Empty &&
+                    get_cell(GAME.board, SELECTED_CELL).type == .Elemental {
+                        path, found := get_path(GAME.board, { SELECTED_CELL, HOVERING_CELL })
+                        if found { MOVE_PATH = path } else { MOVE_PATH = {} }
+                    }
                 }
             }
+        } else {
+            MOVE_PATH = {}
         }
 
         // }}}
 
         // {{{ DEBUG INFO
-        debug_info : string
-        if DRAW_BOARD && valid(SELECTED_CELL) {
-            debug_info = fmt.tprintf("%v\nSelected: %v", debug_info, SELECTED_CELL)
-            if GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
-                debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].data)
-            } else {
-                debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].type)
+        when DEBUG_INFO == true {
+            debug_info : string
+            if DRAW_BOARD && valid(SELECTED_CELL) {
+                debug_info = fmt.tprintf("%v\nSelected: %v", debug_info, SELECTED_CELL)
+                if GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].type == .Elemental {
+                    debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].data)
+                } else {
+                    debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[SELECTED_CELL.x][SELECTED_CELL.y].type)
+                }
             }
-        }
-        if DRAW_BOARD && valid(HOVERING_CELL) {
-            debug_info = fmt.tprintf("%v\nHovering: %v", debug_info, HOVERING_CELL)
-            if GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
-                debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].data)
-            } else {
-                debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type)
+            if DRAW_BOARD && valid(HOVERING_CELL) {
+                debug_info = fmt.tprintf("%v\nHovering: %v", debug_info, HOVERING_CELL)
+                if GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type == .Elemental {
+                    debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].data)
+                } else {
+                    debug_info = fmt.tprintf("%v %v", debug_info, GAME.board.cells[HOVERING_CELL.x][HOVERING_CELL.y].type)
+                }
             }
-        }
-        if DRAW_BOARD {
-            used := [?]bool{GAME.used_spell, GAME.used_move, GAME.used_attack}
-            debug_info = fmt.tprintf("%v\nGAME: turn: %v | used: %v | players: %v", debug_info, GAME.turn, used, GAME.players)
-            debug_info = fmt.tprintf("%v\n%v - %#v", debug_info, ANIM, MOVE_PATH[:get_path_length(MOVE_PATH[:])])
-            debug_info = fmt.tprintf("%v\n skip_input: %v", debug_info, skip_input)
-            debug_info = fmt.tprintf("%v\n GAME_PLAYER_ID: %v", debug_info, GAME_PLAYER_ID)
+            // if DRAW_BOARD {
+            //     used := [?]bool{GAME.used_spell, GAME.used_move, GAME.used_attack}
+            //     debug_info = fmt.tprintf("%v\nGAME: turn: %v | used: %v | players: %v", debug_info, GAME.turn, used, GAME.players)
+            //     debug_info = fmt.tprintf("%v\n%v - %#v", debug_info, ANIM, MOVE_PATH[:get_path_length(MOVE_PATH[:])])
+            //     debug_info = fmt.tprintf("%v\n skip_input: %v", debug_info, skip_input)
+            //     debug_info = fmt.tprintf("%v\n GAME_PLAYER_ID: %v", debug_info, GAME_PLAYER_ID)
+            // }
         }
         // }}}
 
@@ -635,9 +670,10 @@ main :: proc() {
                 if DRAW_BOARD {
                     draw_all_elemental_wires(GAME.board)
                     draw_all_healths(GAME.board)
-                    if valid(HOVERING_CELL) { highlight_cell(GAME.board, HOVERING_CELL) }
-                    if valid(SELECTED_CELL) { highlight_cell(GAME.board, SELECTED_CELL) }
+                    if valid(HOVERING_CELL) { highlight_cell(HOVERING_CELL) }
+                    if valid(SELECTED_CELL) { highlight_cell(SELECTED_CELL) }
                     if valid(SELECTED_CELL) && get_path_length(MOVE_PATH[:]) > 0 { draw_path(SELECTED_CELL, MOVE_PATH[:]) }
+                    draw_attacked_tiles(GAME.board, SELECTED_CELL)
 
                     if ATTACK_FIREBALL_POS != ([3]f32{0,0,0}) {
                         c := ATTACK_FIREBALL_COLOR
@@ -680,7 +716,7 @@ main :: proc() {
                     _draw_3d_helper()
                 }
 
-                {
+                when DEBUG_INFO == true {
                     cstr := strings.clone_to_cstring(debug_info)
                     defer delete(cstr)
                     rl.DrawText(cstr, 20, 20, 20, rl.RAYWHITE)
@@ -752,6 +788,10 @@ main :: proc() {
             rl.BeginDrawing(); {
                 rl.ClearBackground({0,0,0,255})
                 rl.DrawText("Here be dragons", 100, 100, 64, TW(.ROSE5))
+                rl.DrawText("F1:  Open Menu\nF2: Regenerate the Board\nF3: Show/Hide the Board\nF4: Change Background Color Palette\nF5: AI game action\nF6: Hide Cursor\nF7: Mute audio", 100, 200, 64, TW(.SLATE3))
+                // TODO:
+                // audio mute
+                // shaders
             }; rl.EndDrawing()
         }
         case .None: panic("How?")
@@ -761,8 +801,10 @@ main :: proc() {
     }
     // }}}
 
-    clear_socket(SOCK_ACTION)
-    clear_socket(SOCK_BOARD)
-    write_player_id(0)
+    if SETTINGS.game_mode == .Multiplayer && SETTINGS.multiplayer_mode == .Network {
+        clear_socket(SOCK_ACTION)
+        clear_socket(SOCK_BOARD)
+        write_player_id(0)
+    }
     // }}}
 }

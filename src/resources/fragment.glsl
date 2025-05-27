@@ -122,6 +122,15 @@ vec4 fbm_warp(in vec3 p) {
 float length_sq(in vec3 v) { return v.x*v.x + v.y*v.y + v.z*v.z; }
 float length_sq(in vec2 v) { return v.x*v.x + v.y*v.y; }
 
+vec3 palette(in float t) {
+    vec3 a = vec3 ( 0.5, 0.5, 0.5 );
+    vec3 b = vec3 ( 0.5, 0.5, 0.5 );
+    vec3 c = vec3 ( 1.0, 1.0, 1.0 );
+    vec3 d = vec3 ( 0.263, 0.416, 0.557 );
+    vec3 r = a * bg_color_2 + b*cos( 6.28318*(c*t+d) + sin(bg_color_1) );
+    return r*r*r * 0.5;
+}
+
 void main() {
     vec4 texelColor = texture(texture0, frag_tex_coord);
     vec3 viewD = normalize(viewPos - frag_pos);
@@ -155,7 +164,7 @@ void main() {
                     }
                 }
             } else {
-                // color = vec3(1,0,1);
+                color = vec3(1,0,1);
             }
             // }
             color.rgb = clamp(color.rgb, frag_color.rgb * 0.1, frag_color.rgb * 2.0);
@@ -165,12 +174,9 @@ void main() {
         // background
         if (length_sq(frag_pos) >= 20*20) {
             vec2 p = uv * 10;
-            // p -= mod(p, 0.1);
+            p -= mod(p, 0.025);
             vec4 n = fbm_warp(vec3(p + 1000.0, 0) * 0.1);
-            float r = n.x;// * clamp(length(n.yzw) - mod(length(n.yzw), 1.0), 0.1, 1.0);
-            vec3 c1 = bg_color_1; //vec3(0.392, 0.454, 0.545); //vec3(0.341, 0.396, 0.478);
-            vec3 c2 = bg_color_2; //vec3(0.850, 0.466, 0.023); //vec3(0.956, 0.533, 0.023);
-            color = (max(r, 0.0) * c1 + max(-r, 0.0) * c2);// * pow(length(n.yzw), 0.5);
+            color = palette(n.x);
         }
     }
 

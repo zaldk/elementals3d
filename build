@@ -1,0 +1,62 @@
+#!/usr/bin/env lua
+
+print("build.lua ftw")
+
+local function directory_exists(path)
+    return os.execute("test -d " .. path)
+end
+
+local function file_exists(path)
+    return os.execute("test -f " .. path)
+end
+
+local function run_command(cmd_str)
+    print("Executing: " .. cmd_str)
+    local ok, _, code = os.execute(cmd_str)
+    if not ok then
+        io.stderr:write("Error: Command failed with exit code " .. tostring(code or 1) .. "\n")
+        io.stderr:write("Command: " .. cmd_str .. "\n")
+        os.exit(code or 1)
+    end
+    return true
+end
+
+local build_dir = "./.build"
+if not directory_exists(build_dir) then
+    print("Creating build directory: " .. build_dir)
+    local mkdir_ok, _, mkdir_code = os.execute("mkdir -p " .. build_dir)
+    if not mkdir_ok then
+        io.stderr:write("Error: Failed to create directory " .. build_dir .. " (code: " .. tostring(mkdir_code or 1) .. ")\n")
+        os.exit(1)
+    end
+end
+
+local gitignore_file = build_dir .. "/.gitignore"
+if not file_exists(gitignore_file) then
+    print("Creating gitignore: " .. gitignore_file)
+    local file, err = io.open(gitignore_file, "w")
+    if not file then
+        io.stderr:write("Error: Could not create " .. gitignore_file .. ": " .. tostring(err) .. "\n")
+        os.exit(1)
+    end
+    file:write("*\n")
+    file:close()
+end
+
+-- %V is the ISO 8601 week number (week starts at Monday), same as 'date +%V'
+local year_number = os.date("%y")
+local week_number = os.date("%V")
+local revision = "a"
+local version = year_number .. "w" .. week_number .. revision
+print("Version: " .. version)
+
+run_command(table.concat({
+    'odin run ./src',
+    '-out:'..build_dir..'/elementals.'..version..'.dev',
+    '-o:minimal',
+    '-target:linux_amd64',
+    '-define:SHADERS=true',
+    -- '-define:VR=true',
+}, ' '))
+
+os.exit(0)
