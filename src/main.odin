@@ -34,7 +34,7 @@ SETTINGS := struct{
 
 ENABLED_SHADERS :: #config(SHADERS, false)
 ENABLED_VR :: #config(VR, false)
-DEBUG_INFO :: true
+DEBUG_INFO :: false
 
 TARGET_FPS :: 120
 EPSILON :: 0.001
@@ -575,6 +575,9 @@ main :: proc() {
                     }
                     if get_player(HOVERING_CELL) == PlayerType(this_player + 1) {
                         SELECTED_CELL = HOVERING_CELL
+                        if get_cell(GAME.board, HOVERING_CELL).type != .Elemental {
+                            MOVE_PATH = {}
+                        }
                     }
                 }
             }
@@ -720,8 +723,8 @@ main :: proc() {
                     cstr := strings.clone_to_cstring(debug_info)
                     defer delete(cstr)
                     rl.DrawText(cstr, 20, 20, 20, rl.RAYWHITE)
+                    rl.DrawFPS(0,0)
                 }
-            rl.DrawFPS(0,0)
             }; rl.EndDrawing()
         }
         case .Menu: {
@@ -736,32 +739,44 @@ main :: proc() {
 
                 btn_size := [2]f32{500, 200}
 
-                btn_pos_play := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 - btn_size.y * 1.25 }
-                btn_pos_conf := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 }
-                btn_pos_quit := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 + btn_size.y * 1.25 }
+                btn_pos_play_1 := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 - btn_size.y * 1.75 }
+                btn_pos_play_2 := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 - btn_size.y * 0.575 }
+                btn_pos_conf   := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 + btn_size.y * 0.575 }
+                btn_pos_quit   := [2]f32{ w/2 - btn_size.x/2, h/2 - btn_size.y/2 + btn_size.y * 1.75 }
 
-                state_play, action_play := button({ btn_pos_play.x, btn_pos_play.y, btn_size.x, btn_size.y })
+                state_play_1, action_play_1 := button({ btn_pos_play_1.x, btn_pos_play_1.y, btn_size.x, btn_size.y })
+                state_play_2, action_play_2 := button({ btn_pos_play_2.x, btn_pos_play_2.y, btn_size.x, btn_size.y })
                 state_conf, action_conf := button({ btn_pos_conf.x, btn_pos_conf.y, btn_size.x, btn_size.y })
                 state_quit, action_quit := button({ btn_pos_quit.x, btn_pos_quit.y, btn_size.x, btn_size.y })
 
-                text_play :: "Play";      text_play_size := measure_text(text_play)
-                text_conf :: "Settings";  text_conf_size := measure_text(text_conf)
+                text_play_1 :: "PvE";     text_play_1_size := measure_text(text_play_1)
+                text_play_2 :: "PvP";     text_play_2_size := measure_text(text_play_2)
+                text_conf :: "Help";  text_conf_size := measure_text(text_conf)
                 text_quit :: "Quit";      text_quit_size := measure_text(text_quit)
 
-                color_play_fg := [?]Color{ TW(.GREEN4), TW(.GREEN5), TW(.GREEN3) }
+                color_play_1_fg := [?]Color{ TW(.GREEN4), TW(.GREEN5), TW(.GREEN3) }
+                color_play_2_fg := [?]Color{ TW(.GREEN4), TW(.GREEN5), TW(.GREEN3) }
                 color_conf_fg := [?]Color{  TW(.BLUE4),  TW(.BLUE5),  TW(.BLUE3) }
                 color_quit_fg := [?]Color{   TW(.RED4),   TW(.RED5),   TW(.RED3) }
 
-                color_play_bg := [?]Color{   TW(.TEAL8),   TW(.TEAL9),   TW(.TEAL7) }
+                color_play_1_bg := [?]Color{   TW(.TEAL8),   TW(.TEAL9),   TW(.TEAL7) }
+                color_play_2_bg := [?]Color{   TW(.TEAL8),   TW(.TEAL9),   TW(.TEAL7) }
                 color_conf_bg := [?]Color{ TW(.INDIGO8), TW(.INDIGO9), TW(.INDIGO7) }
                 color_quit_bg := [?]Color{   TW(.ROSE8),   TW(.ROSE9),   TW(.ROSE7) }
 
-                rl.DrawRectangleV(btn_pos_play, btn_size, color_play_fg[state_play])
-                rl.DrawRectangleV(btn_pos_play + 10, btn_size - 20, color_play_bg[state_play])
-                rl.DrawText(text_play,
-                    i32(btn_pos_play.x + btn_size.x/2 - text_play_size.x/2),
-                    i32(btn_pos_play.y + btn_size.y/2 - text_play_size.y/2),
-                    64, color_play_fg[state_play])
+                rl.DrawRectangleV(btn_pos_play_1, btn_size, color_play_1_fg[state_play_1])
+                rl.DrawRectangleV(btn_pos_play_1 + 10, btn_size - 20, color_play_1_bg[state_play_1])
+                rl.DrawText(text_play_1,
+                    i32(btn_pos_play_1.x + btn_size.x/2 - text_play_1_size.x/2),
+                    i32(btn_pos_play_1.y + btn_size.y/2 - text_play_1_size.y/2),
+                    64, color_play_1_fg[state_play_1])
+
+                rl.DrawRectangleV(btn_pos_play_2, btn_size, color_play_2_fg[state_play_2])
+                rl.DrawRectangleV(btn_pos_play_2 + 10, btn_size - 20, color_play_2_bg[state_play_2])
+                rl.DrawText(text_play_2,
+                    i32(btn_pos_play_2.x + btn_size.x/2 - text_play_2_size.x/2),
+                    i32(btn_pos_play_2.y + btn_size.y/2 - text_play_2_size.y/2),
+                    64, color_play_2_fg[state_play_2])
 
                 rl.DrawRectangleV(btn_pos_conf, btn_size, color_conf_fg[state_conf])
                 rl.DrawRectangleV(btn_pos_conf + 10, btn_size - 20, color_conf_bg[state_conf])
@@ -778,7 +793,13 @@ main :: proc() {
                     64, color_quit_fg[state_quit])
 
                 switch {
-                case action_play: VIEW_TARGET = .Game
+                case action_play_1:
+                    VIEW_TARGET = .Game
+                    SETTINGS.game_mode = .Singleplayer
+                case action_play_2:
+                    VIEW_TARGET = .Game
+                    SETTINGS.game_mode = .Multiplayer
+                    SETTINGS.multiplayer_mode = .Local
                 case action_conf: VIEW_TARGET = .Conf
                 case action_quit: quit = true
                 }
